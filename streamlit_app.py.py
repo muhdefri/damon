@@ -1781,9 +1781,9 @@ with band_col:
         help="Choose which frequency bands are included in the charts.",
     )
 
-# Keep the date/site-filtered data for the permanent Site Level Summary.
-# This is intentionally captured BEFORE Sector/FreqBand chart filters so
-# the Site Level Summary always represents the complete selected site.
+# Keep the date/site-filtered data for the Site Level Summary used by
+# non-KPI-Analysis layouts. This is captured BEFORE Sector/FreqBand
+# chart filters so the summary represents the complete selected site.
 site_level_df = site_df.copy()
 
 # Apply both chart filters before KPI processing.
@@ -1818,7 +1818,7 @@ else:
 # This is independent from the sector-level Payload charts below.
 # ============================================================
 
-if "Payload" in selected_kpis or "Total Payload Sector" in selected_kpis:
+if chart_layout != "KPI Analysis" and ("Payload" in selected_kpis or "Total Payload Sector" in selected_kpis):
 
     payload_col = kpi_actual_columns["Payload"]
 
@@ -4494,7 +4494,7 @@ if chart_layout == "KPI Analysis":
 
 
 # ============================================================
-# SITE LEVEL SUMMARY — ALWAYS AT THE BOTTOM
+# SITE LEVEL SUMMARY — NON-KPI ANALYSIS LAYOUTS ONLY
 # ============================================================
 #
 # Excel-style site summary:
@@ -4502,9 +4502,9 @@ if chart_layout == "KPI Analysis":
 #   - Last TTI Ratio (%)      -> MAX, shown as line
 #   - 4G Cell Availability(%) -> AVERAGE, shown as line
 #
-# This chart is independent of the selected KPI menu and is shown
-# at the bottom of every chart layout (Horizontal / Vertical /
-# 2 Charts / KPI Analysis). It uses the complete selected Site + Date Range data,
+# This chart remains available for Horizontal / Vertical / 2 Charts.
+# It is intentionally hidden when Chart Layout = KPI Analysis.
+# It uses the complete selected Site + Date Range data,
 # before Sector/FreqBand chart filters are applied.
 # ============================================================
 
@@ -4749,7 +4749,9 @@ def render_site_level_summary():
     )
 
 
-render_site_level_summary()
+# Site Level Summary is intentionally hidden in KPI Analysis.
+if chart_layout != "KPI Analysis":
+    render_site_level_summary()
 
 # ============================================================
 # DEBUG
