@@ -1,0 +1,4718 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
+from PIL import Image
+from io import BytesIO
+import zipfile
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import re
+import io
+import math
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+st.set_page_config(
+    page_title="RAN KPI Dashboard",
+    page_icon="📡",
+    layout="wide",
+)
+
+st.title("📡 RAN KPI Dashboard")
+st.caption("Test version — CSV only")
+
+
+# ============================================================
+# CHART RENDER COLLECTOR
+# ============================================================
+# Keep the existing dashboard rendering exactly the same while
+# collecting the displayed Plotly figures for grouped download.
+_download_figures = []
+
+def show_chart(fig, compact_summary=False, **kwargs):
+    """
+    Render charts with a large plotting area and a responsive Cell Name legend.
+
+    - Keeps the original Cell Name values.
+    - Legend is always below the chart.
+    - Legend wraps to multiple rows automatically.
+    - Chart height grows with the number of traces.
+    - Lines/markers are explicitly kept visible.
+    """
+    _download_figures.append(fig)
+
+    # Count actual named traces.
+    trace_count = sum(
+        1 for trace in fig.data
+        if getattr(trace, "name", None)
+    )
+
+    # More traces -> more legend rows -> more chart height.
+    # Keep the plot area itself large; only the overall figure grows.
+    legend_rows = max(1, math.ceil(max(trace_count, 1) / 3))
+    chart_height = max(
+        540,
+        430 + (legend_rows * 42),
+    )
+
+    # Apply line-only properties ONLY to line/scatter traces.
+    # Some KPI charts (e.g. TA Distribution) use Bar traces, and
+    # Bar does not support Scatter-only properties such as connectgaps.
+    # Applying those properties globally causes Plotly ValueError.
+    for trace in fig.data:
+        trace_type = getattr(trace, "type", "")
+
+        if trace_type in ("scatter", "scattergl", "scatter3d"):
+            # Do NOT overwrite a line width explicitly configured by the
+            # chart itself (important for Site Level Summary TTI/Availability).
+            current_width = None
+            current_marker_size = None
+            try:
+                current_width = trace.line.width
+            except Exception:
+                pass
+            try:
+                current_marker_size = trace.marker.size
+            except Exception:
+                pass
+
+            update_kwargs = {
+                "connectgaps": True,
+                "opacity": 1.0,
+            }
+            if current_width is None:
+                update_kwargs["line"] = dict(width=2.2)
+            if current_marker_size is None:
+                update_kwargs["marker"] = dict(size=4)
+
+            trace.update(**update_kwargs)
+
+        elif trace_type == "bar":
+            # Preserve the bar opacity selected by the chart.
+            # This keeps the Payload background translucent so the KPI
+            # lines remain visually dominant.
+            pass
+        else:
+            # Safe fallback for other trace types.
+            try:
+                trace.update(opacity=1.0)
+            except Exception:
+                pass
+
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(
+            family="Arial",
+            size=10,
+            color="#333333",
+        ),
+        title=dict(
+            font=dict(
+                family="Arial",
+                size=15,
+                color="#111111",
+            ),
+            x=0.0,
+            xanchor="left",
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            gridwidth=1,
+            zeroline=False,
+            showline=True,
+            linecolor="#777777",
+            linewidth=1,
+            automargin=True,
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            gridwidth=1,
+            zeroline=False,
+            showline=True,
+            linecolor="#777777",
+            linewidth=1,
+            automargin=True,
+        ),
+        legend=dict(
+            title=dict(
+                text="Cell Name",
+                font=dict(
+                    family="Arial Black",
+                    size=11,
+                    color="#222222",
+                ),
+            ),
+            font=dict(
+                family="Arial Black",
+                size=10,
+                color="#222222",
+            ),
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(255,255,255,0)",
+            traceorder="normal",
+            itemsizing="constant",
+            # Fixed entry width makes long Cell Names wrap instead of
+            # squeezing the plotting area horizontally.
+            entrywidth=190,
+            entrywidthmode="pixels",
+        ),
+        height=chart_height,
+        margin=dict(
+            l=42 if not compact_summary else 18,
+            r=2 if not compact_summary else 0,
+            t=65,
+            # Reserve enough space for all legend rows.
+            b=max(125, 90 + (legend_rows * 34)),
+        ),
+    )
+
+    st.plotly_chart(fig, **kwargs)
+
+
+# ============================================================
+# KPI CONFIG
+# Based on the actual KPI CSV headers supplied for this test.
+# ============================================================
+KPI_CONFIG = {
+    # ========================================================
+    # Accessibility
+    # ========================================================
+    "4G Cell Availability": {
+        "column": "4G Cell Availability(%)",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "SSSR": {
+        "column": "SSSR (LTE)(%)",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "RRC Setup SR": {
+        "column": "RRC Setup Success Rate(%)",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "E-RAB Setup SR": {
+        "column": "HTI_E-RAB Setup Success Rate",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "E-RAB Setup SR VoIP": {
+        "column": "E-RAB Setup Success Rate (VoIP)(%)",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "S1 Setup SR": {
+        "column": "HX4_S1 Setup Success Rate",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "VoLTE CSSR": {
+        "column": "Voice Call Setup Success Rate (VoLTE)",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+    "HX4 VoLTE CSSR": {
+        "column": "HX4_VOLTE CSSR",
+        "category": "Accessibility",
+        "unit": "%",
+    },
+
+    # ========================================================
+    # Retainability
+    # ========================================================
+    "E-RAB Drop": {
+        "column": "ERAB Drop (LTE)",
+        "category": "Retainability",
+        "unit": "%",
+    },
+    "Radio Drop Rate": {
+        "column": "Radio Drop Rate",
+        "category": "Retainability",
+        "unit": "%",
+    },
+    "E2E Drop Rate": {
+        "column": "E2E Drop Rate",
+        "category": "Retainability",
+        "unit": "%",
+    },
+    "E-RAB Abnormal Release": {
+        "column": "L.E-RAB.AbnormRel",
+        "category": "Retainability",
+        "unit": "",
+    },
+    "Radio Abnormal Release": {
+        "column": "L.E-RAB.AbnormRel.Radio",
+        "category": "Retainability",
+        "unit": "",
+    },
+    "TNL Abnormal Release": {
+        "column": "L.E-RAB.AbnormRel.TNL",
+        "category": "Retainability",
+        "unit": "",
+    },
+
+    # ========================================================
+    # Mobility
+    # ========================================================
+    "HOSR Inter": {
+        "column": "HOSR Inter(%)",
+        "category": "Mobility",
+        "unit": "%",
+    },
+    "HOSR Intra": {
+        "column": "HOSR Intra(%)",
+        "category": "Mobility",
+        "unit": "%",
+    },
+    "HOSR IRAT": {
+        "column": "HOSR IRAT(%)",
+        "category": "Mobility",
+        "unit": "%",
+    },
+    "HOSR Inter+Intra": {
+        "column": "HOSR INTER-INTRA FREQ",
+        "category": "Mobility",
+        "unit": "%",
+    },
+    "Pop 4G HOSR Inter+Intra": {
+        "column": "Pop 4G HOSR Inter+Intra",
+        "category": "Mobility",
+        "unit": "%",
+    },
+
+    # ========================================================
+    # Utilization
+    # ========================================================
+    "PRB": {
+        "column": "4G DL PRB Rate",
+        "category": "Utilization",
+        "unit": "%",
+    },
+    "DL PRB Utilization": {
+        "column": "MM.DL PRB Utilization(%)",
+        "category": "Utilization",
+        "unit": "%",
+    },
+    "HX4 DL PRB Utilization": {
+        "column": "HX4_DL PRB Utilization",
+        "category": "Utilization",
+        "unit": "%",
+    },
+    "HX4 UL PRB Utilization": {
+        "column": "HX4_UL PRB Utilization",
+        "category": "Utilization",
+        "unit": "%",
+    },
+    "RRC User": {
+        "column": "SWAP2016_4G_Avg RRC User_New(number)",
+        "category": "Utilization",
+        "unit": "Users",
+    },
+    "RRC User Max": {
+        "column": "SWAP2016_4G_Max RRC User_New(number)",
+        "category": "Utilization",
+        "unit": "Users",
+    },
+    "CAP RRC Connected User": {
+        "column": "CAP RRC Connected User",
+        "category": "Utilization",
+        "unit": "Users",
+    },
+    "Number of RRC Connected User": {
+        "column": "Number of RRC Connected User",
+        "category": "Utilization",
+        "unit": "Users",
+    },
+    "Last TTI Ratio": {
+        "column": "Last TTI Ratio %",
+        "category": "Utilization",
+        "unit": "%",
+    },
+
+    # ========================================================
+    # Traffic
+    # ========================================================
+    "Payload": {
+        "column": "4GTotalPayloadGB",
+        "category": "Traffic",
+        "unit": "GB",
+        "chart": "stacked",
+    },
+    "DL Payload": {
+        "column": "Payload_DL_GB(%)",
+        "category": "Traffic",
+        "unit": "",
+    },
+    "UL Payload": {
+        "column": "UL Payload (GB)",
+        "category": "Traffic",
+        "unit": "GB",
+    },
+    "VoLTE Traffic": {
+        "column": "VoLTE Traffic (Erl)(Erl)",
+        "category": "Traffic",
+        "unit": "Erl",
+    },
+    "DL Cell Throughput": {
+        "column": "DL Cell Throughput(Mbit/s)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+    "UL Cell Throughput": {
+        "column": "UL Cell Throughput(Mbit/s)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+    "DL User Throughput": {
+        "column": "DL User Throughput (Mbps)(MB/s)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+    "UL User Throughput": {
+        "column": "UL User Throughput (Mbps)(MB/s)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+    "HX4 DL User Throughput": {
+        "column": "HX4_DL User Throughput (Mbps)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+    "HX4 UL User Throughput": {
+        "column": "HX4_UL User Throughput (Mbps)",
+        "category": "Traffic",
+        "unit": "Mbps",
+    },
+
+    # ========================================================
+    # Radio / Coverage / Quality
+    # ========================================================
+    "Average TA": {
+        "column": "Average TA (m)",
+        "category": "Radio/Coverage",
+        "unit": "m",
+    },
+    "TA Distribution": {
+        "column": "L.RA.TA.UE.Index0",
+        "category": "Radio/Coverage",
+        "unit": "UE",
+        "chart": "ta_distribution",
+    },
+    "Average TA New": {
+        "column": "Average TA (meters) new",
+        "category": "Radio/Coverage",
+        "unit": "m",
+    },
+    "CQI": {
+        "column": "CQI Avg",
+        "category": "Radio/Coverage",
+        "unit": "",
+    },
+    "UL Interference": {
+        "column": "L.UL.Interference.Avg(dBm)",
+        "category": "Radio/Coverage",
+        "unit": "dBm",
+    },
+    "UL RSSI": {
+        "column": "UL_RSSI_LTE_New",
+        "category": "Radio/Coverage",
+        "unit": "dBm",
+    },
+    "UL RSSI PUCCH": {
+        "column": "UL RSSI PUCCH (dBm)_Num",
+        "category": "Radio/Coverage",
+        "unit": "dBm",
+    },
+    "Cell Edge User Ratio": {
+        "column": "Cell Edge User Ratio %",
+        "category": "Radio/Coverage",
+        "unit": "%",
+    },
+    "Edge User Ratio": {
+        "column": "Edge User Ratio(PL9~14/PL0~14)",
+        "category": "Radio/Coverage",
+        "unit": "%",
+    },
+    "RANK2 Rate": {
+        "column": "RANK2 Rate",
+        "category": "Radio/Coverage",
+        "unit": "%",
+    },
+    "SQM SSSR": {
+        "column": "SQM_SSSR",
+        "category": "Radio/Coverage",
+        "unit": "%",
+    },
+
+    # ========================================================
+    # Spectrum Efficiency
+    # ========================================================
+    "DL New Spectrum Efficiency": {
+        "column": "DL New Spectrum Efficiency",
+        "category": "Spectrum",
+        "unit": "",
+    },
+    "DL Spectrum Efficiency": {
+        "column": "Spectrum Efficiency (DL)",
+        "category": "Spectrum",
+        "unit": "",
+    },
+
+    # ========================================================
+    # VoLTE / Packet Quality
+    # ========================================================
+    "VoLTE User Average": {
+        "column": "VOLTE User average",
+        "category": "VoLTE",
+        "unit": "Users",
+    },
+    "VoLTE User Max": {
+        "column": "VoLTE User Max",
+        "category": "VoLTE",
+        "unit": "Users",
+    },
+    "VoLTE DL Packet Loss": {
+        "column": "VoLTE DL packet loss Ratio(%)",
+        "category": "VoLTE",
+        "unit": "%",
+    },
+    "VoLTE UL Packet Loss": {
+        "column": "VoLTE UL packet loss Ratio",
+        "category": "VoLTE",
+        "unit": "%",
+    },
+    "QCI1 DL Packet Loss": {
+        "column": "HX4_DL Packet Loss Rate of QCI1",
+        "category": "VoLTE",
+        "unit": "%",
+    },
+    "QCI1 UL Packet Loss": {
+        "column": "HX4_UL Packet Loss Rate of QCI1",
+        "category": "VoLTE",
+        "unit": "%",
+    },
+    "Latency": {
+        "column": "HX4_Latency",
+        "category": "VoLTE",
+        "unit": "ms",
+    },
+
+    # ========================================================
+    # Failure / Root Cause Counters
+    # ========================================================
+    "RRC Setup Fail - No Reply": {
+        "column": "L.RRC.SetupFail.NoReply",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "RRC Setup Fail - Reject": {
+        "column": "L.RRC.SetupFail.Rej",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "RRC Setup Fail - Flow Control": {
+        "column": "L.RRC.SetupFail.Rej.FlowCtrl",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "RRC Setup Fail - MME Overload": {
+        "column": "L.RRC.SetupFail.Rej.MMEOverload",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "E-RAB FailEst - No Reply": {
+        "column": "L.E-RAB.FailEst.NoReply",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "E-RAB FailEst - MME": {
+        "column": "L.E-RAB.FailEst.MME",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "E-RAB FailEst - TNL": {
+        "column": "L.E-RAB.FailEst.TNL",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "E-RAB FailEst - RNL": {
+        "column": "L.E-RAB.FailEst.RNL",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+    "E-RAB FailEst - No Radio Resource": {
+        "column": "L.E-RAB.FailEst.NoRadioRes",
+        "category": "Failure Counters",
+        "unit": "",
+    },
+}
+
+# ============================================================
+# KPI HEADER ALIASES
+# ============================================================
+#
+# The dashboard has a canonical KPI name, but uploaded CSVs may
+# use slightly different export/header names.
+#
+# Matching order:
+#   exact -> case-insensitive -> normalized -> aliases
+#
+# If nothing matches, the KPI is NOT silently guessed. It will
+# appear in the dashboard warning as "not found".
+# ============================================================
+
+KPI_HEADER_ALIASES = {
+
+    "4G Cell Availability": [
+        "4G Cell Availability(%)",
+        "4G Cell Availability",
+        "Cell Availability(%)",
+        "Cell Availability",
+        "4G Availability",
+    ],
+
+    "DL Payload": [
+        "Payload_DL_GB(%)",
+        "Payload DL GB",
+        "DL Payload",
+        "DL Payload (GB)",
+    ],
+
+    "SSSR": [
+        "SSSR (LTE)(%)",
+        "SSSR (%)",
+        "SSSR(%)",
+        "SSSR",
+    ],
+
+    "RRC Setup SR": [
+        "RRC Setup Success Rate(%)",
+        "RRC Setup Success Rate (%)",
+        "RRC Setup SR",
+        "RRC Setup Success Rate",
+    ],
+
+    "E-RAB Setup SR": [
+        "HTI_E-RAB Setup Success Rate",
+        "E-RAB Setup Success Rate",
+        "E-RAB Setup SR",
+        "ERAB Setup Success Rate",
+    ],
+
+    "UL Payload": [
+        "UL Payload (GB)",
+        "UL Payload",
+        "UL Payload GB",
+    ],
+
+    "HX4 DL PRB Utilization": [
+        "HX4_DL PRB Utilization",
+        "HX4 DL PRB Utilization",
+        "DL PRB Utilization",
+    ],
+
+    "HX4 UL PRB Utilization": [
+        "HX4_UL PRB Utilization",
+        "HX4 UL PRB Utilization",
+        "UL PRB Utilization",
+    ],
+
+    "HX4 DL User Throughput": [
+        "HX4_DL User Throughput (Mbps)",
+        "HX4 DL User Throughput (Mbps)",
+        "HX4 DL User Throughput",
+    ],
+
+    "DL User Throughput": [
+        "DL User Throughput (Mbps)(MB/s)",
+        "DL User Throughput (Mbps)",
+        "DL User Throughput",
+    ],
+
+    "UL User Throughput": [
+        "UL User Throughput (Mbps)(MB/s)",
+        "UL User Throughput (Mbps)",
+        "UL User Throughput",
+    ],
+
+    "Average TA": [
+        "Average TA (m)",
+        "Average TA (meters)",
+        "Average TA (meters) new",
+        "Average TA",
+    ],
+
+    "Latency": [
+        "HX4_Latency",
+        "HX4 Latency",
+        "Latency",
+        "Latency (ms)",
+    ],
+
+    "Last TTI Ratio": [
+        "Last TTI Ratio %",
+        "Last TTI Ratio(%)",
+        "Last TTI Ratio",
+    ],
+
+    "Number of RRC Connected User": [
+        "Number of RRC Connected User",
+        "RRC Connected User",
+        "Number of RRC Users",
+    ],
+
+    "RANK2 Rate": [
+        "RANK2 Rate",
+        "RANK2 Rate (%)",
+        "RANK2",
+    ],
+
+    "DL Spectrum Efficiency": [
+        "Spectrum Efficiency (DL)",
+        "DL Spectrum Efficiency",
+        "DL Spectrum Efficiency (%)",
+    ],
+
+    "CQI": [
+        "CQI Avg",
+        "CQI Average",
+        "Average CQI",
+        "CQI",
+    ],
+
+    "UL Interference": [
+        "L.UL.Interference.Avg(dBm)",
+        "UL Interference Avg(dBm)",
+        "UL Interference",
+        "UL Interference (dBm)",
+    ],
+
+    "HOSR Intra": [
+        "HOSR Intra(%)",
+        "HOSR Intra (%)",
+        "HOSR Intra",
+    ],
+
+    "HOSR Inter": [
+        "HOSR Inter(%)",
+        "HOSR Inter (%)",
+        "HOSR Inter",
+    ],
+
+    "E-RAB Setup SR VoIP": [
+        "E-RAB Setup Success Rate (VoIP)(%)",
+        "E-RAB Setup Success Rate (VoIP)",
+        "E-RAB Setup SR VoIP",
+        "ERAB Setup Success Rate VoIP",
+    ],
+
+    # Common identifiers
+    "_Date": [
+        "Date",
+        "DATE",
+        "date",
+        "Timestamp",
+        "Time",
+    ],
+
+    "_eNodeB": [
+        "eNodeB Name",
+        "eNodeBName",
+        "ENodeB Name",
+        "ENODEB Name",
+        "eNodeB",
+        "Site Name",
+    ],
+
+    "_Cell": [
+        "Cell Name",
+        "CellName",
+        "CELL NAME",
+        "Cell",
+        "Cell_Name",
+    ],
+
+    "_LocalCell": [
+        "LocalCell Id",
+        "LocalCell ID",
+        "LocalCellId",
+        "Local Cell ID",
+        "Local Cell Id",
+    ],
+}
+
+
+def find_kpi_column(df, kpi_name):
+    """
+    Resolve the actual CSV column for a KPI.
+
+    The canonical KPI_CONFIG column is checked first, followed by
+    explicitly approved aliases.
+    """
+    canonical = KPI_CONFIG[kpi_name]["column"]
+
+    candidates = [canonical]
+    candidates.extend(
+        KPI_HEADER_ALIASES.get(kpi_name, [])
+    )
+
+    return find_column(
+        df,
+        list(dict.fromkeys(candidates)),
+    )
+
+
+# ============================================================
+# INTERNAL MASTER MAPPING
+#
+# The user should NOT upload this mapping.
+# It is embedded in the dashboard.
+#
+# Source basis: the supplied CI / Sector / FreqBand master.
+# Sector 0 is displayed as "Indoor".
+# ============================================================
+MASTER_MAPPING = {
+    # L900
+    1:  (1, "900"),
+    2:  (2, "900"),
+    3:  (3, "900"),
+
+    # L1800 - standard
+    4:  (1, "1800"),
+    5:  (2, "1800"),
+    6:  (3, "1800"),
+
+    # L2100 - standard
+    7:  (1, "2100"),
+    8:  (2, "2100"),
+    9:  (3, "2100"),
+
+    # L700
+    21: (1, "700"),
+    22: (2, "700"),
+    23: (3, "700"),
+
+    # L850
+    131: (1, "850"),
+    132: (2, "850"),
+    133: (3, "850"),
+    134: (4, "850"),
+
+    # L1800 additional sector groups
+    14: (1, "1800"),
+    15: (2, "1800"),
+    16: (3, "1800"),
+    24: (4, "1800"),
+    34: (1, "1800"),
+    35: (2, "1800"),
+    36: (3, "1800"),
+    44: (1, "1800"),
+    45: (2, "1800"),
+    46: (3, "1800"),
+
+    # L2100 additional sector groups
+    17: (1, "2100"),
+    18: (2, "2100"),
+    19: (3, "2100"),
+    27: (4, "2100"),
+    37: (1, "2100"),
+    38: (2, "2100"),
+    39: (3, "2100"),
+    47: (1, "2100"),
+    48: (2, "2100"),
+    49: (3, "2100"),
+
+    # 2300 F1
+    111: (1, "2300F1"),
+    112: (2, "2300F1"),
+    113: (3, "2300F1"),
+
+    # 2300 F2
+    121: (1, "2300F2"),
+    122: (2, "2300F2"),
+    123: (3, "2300F2"),
+
+    # Indoor / Sector 0
+    51:  (0, "1800"),
+    52:  (0, "1800"),
+    94:  (0, "1800"),
+    95:  (0, "1800"),
+    96:  (0, "1800"),
+
+    91:  (0, "2100"),
+    92:  (0, "2100"),
+    97:  (0, "2100"),
+    98:  (0, "2100"),
+    99:  (0, "2100"),
+
+    141: (0, "2300F1"),
+    142: (0, "2300F1"),
+    143: (0, "2300F1"),
+
+    151: (0, "2300F2"),
+    152: (0, "2300F2"),
+    153: (0, "2300F2"),
+}
+
+CI_TO_SECTOR = {
+    ci_value: sector
+    for ci_value, (sector, band) in MASTER_MAPPING.items()
+}
+
+CI_TO_BAND = {
+    ci_value: band
+    for ci_value, (sector, band) in MASTER_MAPPING.items()
+}
+
+
+def parse_kpi_numeric(series):
+    """Convert KPI values from CSV to numeric safely.
+
+    Handles common export formats such as:
+    - 98.7
+    - "98.7%"
+    - "1,234.56"
+    - blank / "-" / "N/A"
+
+    Invalid/non-numeric values become NaN instead of breaking the dashboard.
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+
+    cleaned = (
+        series.astype("string")
+        .str.strip()
+        .replace({"": pd.NA, "-": pd.NA, "N/A": pd.NA, "NA": pd.NA})
+        .str.replace("%", "", regex=False)
+        .str.replace(",", "", regex=False)
+    )
+
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def normalize_header(value):
+    """
+    Normalize a CSV header for tolerant matching.
+
+    Example:
+        "SSSR (LTE)(%)" -> "sssrltte"
+        "SSSR_LTE"      -> "sssr_lte"
+        "Cell Name"     -> "cellname"
+
+    The function is intentionally conservative: it does not use
+    fuzzy matching, so an unrelated KPI will not be silently mapped.
+    """
+    text = str(value).strip().lower()
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def find_column(df, candidates):
+    """
+    Find a CSV column using:
+      1. exact match
+      2. case-insensitive match
+      3. normalized-header match
+
+    No fuzzy matching is used.
+    """
+    exact = {
+        str(c).strip(): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+        if candidate in exact:
+            return exact[candidate]
+
+    lower = {
+        str(c).strip().lower(): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        if key in lower:
+            return lower[key]
+
+    normalized = {
+        normalize_header(c): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+        key = normalize_header(candidate)
+        if key in normalized:
+            return normalized[key]
+
+    return None
+
+
+def extract_sum_site(enodeb_name):
+    """
+    Example:
+    4264504E_LTE_MUARA_BULIAN#SUM-JA-MBN-0130#MC
+    -> SUM-JA-MBN-0130
+
+    If there is no SUM- section, return blank.
+    """
+    if pd.isna(enodeb_name):
+        return None
+
+    text = str(enodeb_name).strip()
+    match = re.search(r"(SUM-[^#]+)", text)
+
+    return match.group(1).strip() if match else None
+
+
+def normalize_sector(value):
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    if value == "0":
+        return "Indoor"
+
+    return f"S{value}" if value.isdigit() else value
+
+
+def apply_internal_mapping(df, localcell_col):
+    """
+    Apply the embedded CI -> Sector/FreqBand master.
+
+    We use a dictionary instead of a merge because the master
+    contains repeated CI rows across many site records.
+    This avoids multiplying KPI rows during the join.
+    """
+    ci = pd.to_numeric(
+        df[localcell_col],
+        errors="coerce",
+    )
+
+    df["_CI"] = ci.astype("Int64")
+
+    df["_Sector_Number"] = df["_CI"].map(
+        CI_TO_SECTOR
+    )
+
+    df["_FreqBand"] = df["_CI"].map(
+        CI_TO_BAND
+    )
+
+    df["_Sector_Display"] = df["_Sector_Number"].apply(
+        normalize_sector
+    )
+
+    return df
+
+
+# ============================================================
+# UPLOAD — ONLY RAW KPI CSV
+# ============================================================
+st.sidebar.header("Upload")
+
+uploaded_csv = st.sidebar.file_uploader(
+    "Upload KPI CSV",
+    type=["csv"],
+    help="Test version: CSV only.",
+)
+
+if uploaded_csv is None:
+    st.info("Upload your KPI CSV from the sidebar.")
+    st.stop()
+
+
+@st.cache_data(show_spinner=False)
+def get_csv_headers(file_bytes):
+    """Read only the CSV header once and cache it."""
+    header_df = pd.read_csv(
+        io.BytesIO(file_bytes),
+        nrows=0,
+    )
+    return tuple(
+        str(column).strip()
+        for column in header_df.columns
+    )
+
+
+@st.cache_data(show_spinner=False)
+def load_and_prepare_csv(
+    file_bytes,
+    usecols,
+    enodeb_column,
+    cell_column,
+    localcell_column,
+    date_column,
+    time_column=None,
+):
+    """
+    Read only columns used by the dashboard, then perform the
+    expensive one-time preparation work.
+
+    Streamlit caches this result, so sidebar changes do not force
+    the CSV parsing and mapping work to run again.
+    """
+    frame = pd.read_csv(
+        io.BytesIO(file_bytes),
+        usecols=list(usecols),
+        low_memory=False,
+    )
+
+    frame.columns = [
+        str(column).strip()
+        for column in frame.columns
+    ]
+
+    frame["_Date_Day"] = pd.to_datetime(
+        frame[date_column],
+        errors="coerce",
+    ).dt.normalize()
+
+    # Automatically support both daily and hourly exports.
+    # If a Time column exists, preserve Date + Time for charting.
+    if time_column is not None and time_column in frame.columns:
+        frame["_Date"] = pd.to_datetime(
+            frame[date_column].astype(str).str.strip()
+            + " "
+            + frame[time_column].astype(str).str.strip(),
+            errors="coerce",
+        )
+        frame["_Is_Hourly"] = True
+    else:
+        frame["_Date"] = pd.to_datetime(
+            frame[date_column],
+            errors="coerce",
+        )
+        frame["_Is_Hourly"] = False
+
+    frame["_Site_ID"] = frame[enodeb_column].apply(
+        extract_sum_site
+    )
+
+    frame["_Site_ID_Search"] = (
+        frame["_Site_ID"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+    frame["_eNodeB_Search"] = (
+        frame[enodeb_column]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    frame = apply_internal_mapping(
+        frame,
+        localcell_column,
+    )
+
+    frame["_Sector_Display"] = (
+        frame["_Sector_Number"]
+        .apply(normalize_sector)
+    )
+
+    frame["_Sector_Search"] = (
+        frame["_Sector_Display"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    frame["_Cell_Display"] = (
+        frame[cell_column]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    return frame
+
+
+# UploadedFile itself is intentionally not passed into cache_data.
+# Bytes give Streamlit a stable, cacheable input for the same file.
+file_bytes = uploaded_csv.getvalue()
+
+with st.spinner("Preparing KPI CSV..."):
+
+    csv_headers = get_csv_headers(
+        file_bytes
+    )
+
+    header_frame = pd.DataFrame(
+        columns=csv_headers
+    )
+
+    # --------------------------------------------------------
+    # Required identifiers
+    # --------------------------------------------------------
+    enodeb_col = find_column(
+        header_frame,
+        [
+            "eNodeB Name",
+            "eNodeBName",
+            "ENodeB Name",
+            "ENODEB Name",
+        ],
+    )
+
+    cell_col = find_column(
+        header_frame,
+        [
+            "Cell Name",
+            "CellName",
+            "CELL NAME",
+        ],
+    )
+
+    localcell_col = find_column(
+        header_frame,
+        [
+            "LocalCell Id",
+            "LocalCell ID",
+            "LocalCellId",
+        ],
+    )
+
+    date_col = find_column(
+        header_frame,
+        [
+            "Date",
+            "DATE",
+            "date",
+        ],
+    )
+
+    time_col = find_column(
+        header_frame,
+        [
+            "Time",
+            "TIME",
+            "time",
+        ],
+    )
+
+    required = {
+        "eNodeB Name": enodeb_col,
+        "Cell Name": cell_col,
+        "LocalCell Id": localcell_col,
+        "Date": date_col,
+    }
+
+    missing = [
+        name
+        for name, actual in required.items()
+        if actual is None
+    ]
+
+    if missing:
+        st.error(
+            "Required column(s) not found: "
+            + ", ".join(missing)
+        )
+        st.write(
+            "Available columns:",
+            list(csv_headers),
+        )
+        st.stop()
+
+    # --------------------------------------------------------
+    # Resolve KPI columns from the header only.
+    # --------------------------------------------------------
+    kpi_actual_columns = {}
+
+    for kpi_name in KPI_CONFIG:
+
+        if kpi_name == "TA Distribution":
+            ta0 = "L.RA.TA.UE.Index0"
+            if ta0 in csv_headers:
+                kpi_actual_columns[kpi_name] = ta0
+            continue
+
+        actual_col = find_kpi_column(
+            header_frame,
+            kpi_name,
+        )
+
+        if actual_col is not None:
+            kpi_actual_columns[kpi_name] = actual_col
+
+    # --------------------------------------------------------
+    # Read only columns required by the dashboard.
+    # This avoids loading unused raw KPI columns.
+    # --------------------------------------------------------
+    columns_to_read = {
+        enodeb_col,
+        cell_col,
+        localcell_col,
+        date_col,
+        *kpi_actual_columns.values(),
+    }
+
+    if time_col is not None:
+        columns_to_read.add(time_col)
+
+    ta_distribution_cols = [
+        f"L.RA.TA.UE.Index{i}"
+        for i in range(12)
+        if f"L.RA.TA.UE.Index{i}" in csv_headers
+    ]
+    columns_to_read.update(ta_distribution_cols)
+
+    columns_to_read = tuple(
+        column
+        for column in csv_headers
+        if column in columns_to_read
+    )
+
+    df = load_and_prepare_csv(
+        file_bytes,
+        columns_to_read,
+        enodeb_col,
+        cell_col,
+        localcell_col,
+        date_col,
+        time_col,
+    )
+
+# ============================================================
+# KPI AVAILABILITY
+# ============================================================
+available_kpis = [
+    kpi_name
+    for kpi_name in KPI_CONFIG
+    if kpi_name in kpi_actual_columns
+]
+
+missing_kpis = [
+    kpi_name
+    for kpi_name in KPI_CONFIG
+    if kpi_name not in kpi_actual_columns
+]
+
+if not available_kpis:
+
+    st.error(
+        "No configured KPI columns were found "
+        "in the uploaded CSV."
+    )
+
+    st.write(
+        "Available CSV columns:",
+        list(csv_headers),
+    )
+
+    st.stop()
+
+# ============================================================
+# TOP FILTERS — SITE SEARCH + DATE RANGE
+# ============================================================
+# Keep the fast-access filters together with Chart Layout.
+top_site_col, top_mode_col, top_date_col = st.columns([1.7, 1.7, 2.2])
+
+with top_site_col:
+    st.markdown("**Site Search**")
+    site_input = st.text_input(
+        "Site ID / eNodeB Name",
+        placeholder="SUM-SU-BNJ-8236 or full eNodeB Name",
+        label_visibility="collapsed",
+    )
+
+with top_mode_col:
+    search_mode = st.radio(
+        "Search mode",
+        ["Site ID", "Full eNodeB Name"],
+        horizontal=True,
+    )
+
+with top_date_col:
+    st.markdown("**Date Range**")
+
+    # Date limits are calculated from the uploaded dataset first.
+    all_valid_dates = df["_Date"].dropna()
+
+    if not all_valid_dates.empty:
+        global_min_date = all_valid_dates.min().date()
+        global_max_date = all_valid_dates.max().date()
+
+        date_range = st.date_input(
+            "Date range",
+            value=(global_min_date, global_max_date),
+            min_value=global_min_date,
+            max_value=global_max_date,
+            label_visibility="collapsed",
+        )
+    else:
+        date_range = ()
+
+if search_mode == "Site ID":
+    if site_input:
+        # Robust Site ID matching:
+        # 1) exact match against extracted SUM site ID
+        # 2) fallback to searching the original eNodeB Name
+        #    in case the CSV uses a slightly different naming pattern.
+        raw_site_input = site_input.strip()
+
+        # Users sometimes paste the full eNodeB Name while
+        # "Site ID" mode is selected, e.g.
+        # 426D531E_LTE_BLOCKCRIMBOILIR#SUM-JA-MRT-0195#NR
+        # In that case extract the SUM site ID automatically.
+        site_match = re.search(r"(SUM-[^#\\s]+)", raw_site_input, flags=re.IGNORECASE)
+        site_key = (
+            site_match.group(1).strip().upper()
+            if site_match
+            else raw_site_input.upper()
+        )
+
+        site_df = df[
+            df["_Site_ID_Search"].eq(site_key)
+        ].copy()
+
+        if site_df.empty:
+            site_df = df[
+                df["_eNodeB_Search"]
+                .str.upper()
+                .str.contains(
+                    re.escape(site_key),
+                    na=False,
+                    regex=True,
+                )
+            ].copy()
+
+        # Final fallback: search the extracted SUM token directly in the
+        # raw eNodeB column. This handles CSVs whose internal Site ID
+        # extraction differs from the dashboard parser.
+        if site_df.empty and site_match:
+            site_df = df[
+                df[enodeb_col]
+                .fillna("")
+                .astype(str)
+                .str.upper()
+                .str.contains(
+                    re.escape(site_key),
+                    na=False,
+                    regex=True,
+                )
+            ].copy()
+    else:
+        site_df = df.iloc[0:0].copy()
+else:
+    if site_input:
+        # Full eNodeB Name: allow exact match first, then
+        # case-insensitive contains for easier searching.
+        enodeb_key = site_input.strip()
+
+        site_df = df[
+            df["_eNodeB_Search"].eq(enodeb_key)
+        ].copy()
+
+        if site_df.empty:
+            site_df = df[
+                df["_eNodeB_Search"]
+                .str.contains(
+                    re.escape(enodeb_key),
+                    case=False,
+                    na=False,
+                    regex=True,
+                )
+            ].copy()
+    else:
+        site_df = df.iloc[0:0].copy()
+
+if not site_input:
+    st.info(
+        "Enter a Site ID or Full eNodeB Name "
+        "in the top Site Search control."
+    )
+    st.stop()
+
+if site_df.empty:
+    st.warning(
+        "No matching site/eNodeB Name found."
+    )
+    st.stop()
+
+# ============================================================
+# DATE FILTER
+# ============================================================
+if (
+    isinstance(date_range, tuple)
+    and len(date_range) == 2
+):
+    start_date, end_date = date_range
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+
+    site_df = site_df[
+        (
+            site_df["_Date_Day"] >= start_ts
+        )
+        & (
+            site_df["_Date_Day"] <= end_ts
+        )
+    ].copy()
+
+# ============================================================
+# DATA GRANULARITY
+# ============================================================
+# Daily CSV keeps the original dashboard behavior.
+# Hourly CSV preserves Date + Time in the charts automatically.
+is_hourly = bool(
+    not site_df.empty
+    and site_df["_Is_Hourly"].any()
+)
+
+if is_hourly:
+    st.sidebar.caption("Data mode: Hourly")
+
+sector_values = (
+    site_df["_Sector_Display"]
+    .dropna()
+    .astype(str)
+    .str.strip()
+)
+
+sector_values = [
+    value
+    for value in sector_values.unique()
+    if value
+]
+
+preferred_order = [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "Indoor",
+]
+
+ordered_sectors = [
+    value
+    for value in preferred_order
+    if value in sector_values
+]
+
+ordered_sectors += sorted(
+    value
+    for value in sector_values
+    if value not in ordered_sectors
+)
+
+if ordered_sectors:
+
+    # Selection is rendered in the top Chart Layout control area below.
+    selected_sectors = ordered_sectors.copy()
+
+else:
+
+    selected_sectors = []
+
+    st.sidebar.warning(
+        "No Sector mapping found for this site."
+    )
+
+# ============================================================
+# SIDEBAR — FREQBAND FILTER
+# ============================================================
+band_values = (
+    site_df["_FreqBand"]
+    .dropna()
+    .astype(str)
+    .str.strip()
+)
+band_values = [
+    value
+    for value in band_values.unique()
+    if value
+]
+
+# Selection is rendered in the top Chart Layout control area below.
+selected_bands = sorted(band_values)
+
+# ============================================================
+# SIDEBAR — KPI
+# ============================================================
+st.sidebar.header("3. KPI")
+
+if missing_kpis:
+    st.sidebar.warning(
+        f"{len(missing_kpis)} KPI column(s) not found in this CSV."
+    )
+
+    with st.sidebar.expander(
+        "View missing KPI columns"
+    ):
+        for kpi_name in missing_kpis:
+            st.write(
+                f"- {kpi_name}: "
+                f"`{KPI_CONFIG[kpi_name]['column']}`"
+            )
+
+# KPI selection is grouped only for easier menu navigation.
+# Charts remain independent: one KPI + one Sector = one chart.
+category_order = [
+    "Accessibility",
+    "Retainability",
+    "Mobility",
+    "Utilization",
+    "Traffic",
+    "Radio/Coverage",
+    "Spectrum",
+    "VoLTE",
+    "Failure Counters",
+]
+
+selected_kpis = []
+
+for category in category_order:
+    category_kpis = [
+        kpi
+        for kpi in available_kpis
+        if KPI_CONFIG[kpi]["category"] == category
+    ]
+
+    if not category_kpis:
+        continue
+
+    selected = st.sidebar.multiselect(
+        category,
+        category_kpis,
+        default=(
+            ["SSSR"]
+            if category == "Accessibility"
+            and "SSSR" in category_kpis
+            else []
+        ),
+        key=f"kpi_{category}",
+    )
+
+    selected_kpis.extend(selected)
+
+# ============================================================
+# SITE SUMMARY
+# ============================================================
+st.subheader(
+    f"Site: {site_key if search_mode == 'Site ID' and site_input else site_input}"
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric(
+    "Rows",
+    f"{len(site_df):,}",
+)
+
+col2.metric(
+    "Cells",
+    f"{site_df[cell_col].nunique():,}",
+)
+
+col3.metric(
+    "FreqBands",
+    f"{site_df['_FreqBand'].nunique():,}",
+)
+
+col4.metric(
+    "Sectors",
+    f"{site_df['_Sector_Display'].nunique():,}",
+)
+
+# ============================================================
+# ENODEB INFORMATION
+# ============================================================
+with st.expander(
+    "Matched eNodeB Name"
+):
+
+    for name in (
+        site_df[enodeb_col]
+        .dropna()
+        .astype(str)
+        .unique()
+    ):
+        st.code(name)
+
+# ============================================================
+# CELL MAPPING PREVIEW
+# ============================================================
+with st.expander(
+    "Cell / Sector / FreqBand Mapping"
+):
+
+    mapping_preview = (
+        site_df[
+            [
+                cell_col,
+                localcell_col,
+                "_Sector_Display",
+                "_FreqBand",
+            ]
+        ]
+        .drop_duplicates()
+        .sort_values(
+            [
+                "_Sector_Display",
+                "_FreqBand",
+                cell_col,
+            ]
+        )
+    )
+
+    st.dataframe(
+        mapping_preview,
+        use_container_width=True,
+    )
+
+# ============================================================
+# 4. QUICK KPI
+# ============================================================
+#
+# Shortcut menu for the most frequently checked RAN KPIs.
+# Selecting a KPI here uses the same chart engine as Section 3.
+# ============================================================
+
+QUICK_KPI = [
+    "Payload",
+    "4G Cell Availability",
+    "HX4 DL PRB Utilization",
+    "HX4 UL PRB Utilization",
+    "DL User Throughput",
+    "UL User Throughput",
+    "Average TA",
+    "TA Distribution",
+    "Latency",
+    "Last TTI Ratio",
+    "Total Payload Sector",
+    "Number of RRC Connected User",
+    "RANK2 Rate",
+    "CQI",
+    "UL Interference",
+    "HOSR Intra",
+    "HOSR Inter",
+
+    # Remaining KPI 1 items
+    "SSSR",
+    "RRC Setup SR",
+    "E-RAB Setup SR",
+    "DL Payload",
+    "DL Spectrum Efficiency",
+    "E-RAB Setup SR VoIP",
+]
+
+quick_kpis = st.sidebar.multiselect(
+    "Quick KPI",
+    [
+        kpi
+        for kpi in QUICK_KPI
+        if kpi in KPI_CONFIG
+        and kpi in kpi_actual_columns
+    ],
+    default=[],
+    key="quick_kpi_selection",
+)
+
+# Add Quick KPI selections to the normal KPI selection.
+# dict.fromkeys() removes duplicates while preserving order.
+selected_kpis = list(
+    dict.fromkeys(
+        selected_kpis + quick_kpis
+    )
+)
+
+if not selected_kpis and chart_layout != "KPI Analysis":
+    st.info("Select at least one KPI.")
+    st.stop()
+
+# ============================================================
+# 5. CHART LAYOUT + CHART FILTERS
+# ============================================================
+# One independent layout selector:
+#   Horizontal | Vertical | 2 Charts | KPI Analysis
+#
+# KPI Analysis is a FOURTH layout option. It is NOT inside 2 Charts
+# and does not depend on the 2 Charts rendering logic.
+st.markdown("### Chart Controls")
+
+layout_col, sector_col, band_col = st.columns(
+    [2.5, 1.5, 1.5],
+    gap="small",
+)
+
+with layout_col:
+    chart_layout = st.radio(
+        "Chart Layout",
+        ["Horizontal", "Vertical", "2 Charts", "KPI Analysis"],
+        index=0,
+        horizontal=True,
+        help=(
+            "Choose one independent dashboard layout: "
+            "Horizontal, Vertical, 2 Charts, or KPI Analysis."
+        ),
+        key="chart_layout_selector",
+    )
+
+with sector_col:
+    selected_sectors = st.multiselect(
+        "Select Sector",
+        ordered_sectors,
+        default=ordered_sectors,
+    )
+
+with band_col:
+    selected_bands = st.multiselect(
+        "Select FreqBand",
+        sorted(band_values),
+        default=sorted(band_values),
+        help="Choose which frequency bands are included in the charts.",
+    )
+
+# Keep the date/site-filtered data for the permanent Site Level Summary.
+# This is intentionally captured BEFORE Sector/FreqBand chart filters so
+# the Site Level Summary always represents the complete selected site.
+site_level_df = site_df.copy()
+
+# Apply both chart filters before KPI processing.
+if selected_sectors:
+    site_df = site_df[
+        site_df["_Sector_Search"].isin(selected_sectors)
+    ].copy()
+else:
+    site_df = site_df.iloc[0:0].copy()
+
+if selected_bands:
+    site_df = site_df[
+        site_df["_FreqBand"]
+        .astype(str)
+        .str.strip()
+        .isin(selected_bands)
+    ].copy()
+else:
+    site_df = site_df.iloc[0:0].copy()
+
+# ============================================================
+# SITE-LEVEL PAYLOAD
+# ============================================================
+#
+# One additional chart for total site payload.
+# All cells / sectors / frequency bands are summed by Date.
+#
+# Example:
+#   S1 L1800 + S1 L2100 + S2 L1800 + S3 L900 ...
+#   -> one total Site Payload trend
+#
+# This is independent from the sector-level Payload charts below.
+# ============================================================
+
+if "Payload" in selected_kpis or "Total Payload Sector" in selected_kpis:
+
+    payload_col = kpi_actual_columns["Payload"]
+
+    site_payload_df = site_df[
+        [
+            "_Date",
+            "_Date_Day",
+            payload_col,
+        ]
+    ].copy()
+
+    site_payload_df["_Payload_Value"] = parse_kpi_numeric(
+        site_payload_df[payload_col]
+    )
+
+    site_payload_df["_Chart_Date"] = (
+        site_payload_df["_Date"]
+        if is_hourly
+        else site_payload_df["_Date_Day"]
+    )
+
+    site_payload_df = site_payload_df.dropna(
+        subset=[
+            "_Chart_Date",
+            "_Payload_Value",
+        ]
+    )
+
+    if not site_payload_df.empty:
+
+        site_payload_df = (
+            site_payload_df
+            .groupby(
+                "_Chart_Date",
+                as_index=False,
+            )["_Payload_Value"]
+            .sum()
+            .sort_values("_Chart_Date")
+        )
+
+        site_payload_fig = px.area(
+            site_payload_df,
+            x="_Chart_Date",
+            y="_Payload_Value",
+            markers=False,
+        )
+
+        site_payload_fig.update_layout(
+            title="Payload — Site Level",
+            yaxis=dict(
+                title="",
+            ),
+            xaxis=dict(
+                title="Date",
+                tickformat=(
+                    "%b %d<br>%H:%M"
+                    if is_hourly
+                    else "%b %d"
+                ),
+                hoverformat=(
+                    "%b %d, %Y %H:%M"
+                    if is_hourly
+                    else "%b %d, %Y"
+                ),
+            ),
+            hovermode="x unified",
+            height=430,
+            margin=dict(
+                l=40,
+                r=30,
+                t=65,
+                b=55,
+            ),
+        )
+
+        site_payload_fig.update_traces(
+            hovertemplate=(
+                "<b>Site Total Payload</b><br>"
+                + (
+                    "%{x|%b %d, %Y %H:%M}<br>"
+                    if is_hourly
+                    else "%{x|%b %d, %Y}<br>"
+                )
+                + "Payload: %{y:.2f} GB"
+                "<extra></extra>"
+            )
+        )
+
+        show_chart(
+            site_payload_fig,
+            use_container_width=True,
+        )
+
+        # ========================================================
+        # BAND-LEVEL PAYLOAD
+        # ========================================================
+        #
+        # One chart containing the total Payload of each band:
+        # L900 | L1800 | L2100 | L850 | L2300 | L700
+        #
+        # All sectors/cells belonging to the same band are summed
+        # by Date.
+        # ========================================================
+
+        band_order = [
+            "900",
+            "1800",
+            "2100",
+            "850",
+            "2300",
+            "700",
+        ]
+
+        band_labels = {
+            "900": "L900",
+            "1800": "L1800",
+            "2100": "L2100",
+            "850": "L850",
+            "2300": "L2300",
+            "700": "L700",
+        }
+
+        band_payload_source = site_df[
+            [
+                "_Date",
+                "_Date_Day",
+                "_FreqBand",
+                payload_col,
+            ]
+        ].copy()
+
+        band_payload_source["_Payload_Value"] = parse_kpi_numeric(
+            band_payload_source[payload_col]
+        )
+
+        band_payload_source["_Chart_Date"] = (
+            band_payload_source["_Date"]
+            if is_hourly
+            else band_payload_source["_Date_Day"]
+        )
+
+        # FreqBand is already produced by the internal master
+        # mapping. Normalize it so values such as 1800 / L1800
+        # can be handled consistently.
+        band_payload_source["_Band_Key"] = (
+            band_payload_source["_FreqBand"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .str.replace("L", "", regex=False)
+        )
+
+        band_payload_source = band_payload_source.dropna(
+            subset=[
+                "_Chart_Date",
+                "_Payload_Value",
+            ]
+        )
+
+        band_payload_source = band_payload_source[
+            band_payload_source["_Band_Key"].isin(band_order)
+        ]
+
+        if not band_payload_source.empty:
+
+            band_payload_df = (
+                band_payload_source
+                .groupby(
+                    [
+                        "_Chart_Date",
+                        "_Band_Key",
+                    ],
+                    as_index=False,
+                )["_Payload_Value"]
+                .sum()
+            )
+
+            band_payload_df["_Band"] = (
+                band_payload_df["_Band_Key"]
+                .map(band_labels)
+            )
+
+            band_payload_df = (
+                band_payload_df
+                .sort_values(
+                    [
+                        "_Chart_Date",
+                        "_Band_Key",
+                    ]
+                )
+            )
+
+            band_payload_fig = px.line(
+                band_payload_df,
+                x="_Chart_Date",
+                y="_Payload_Value",
+                color="_Band",
+                category_orders={
+                    "_Band": [
+                        band_labels[b]
+                        for b in band_order
+                    ]
+                },
+                markers=False,
+            )
+
+            band_payload_fig.update_layout(
+                title="Payload — Band Level",
+                yaxis=dict(
+                    title="",
+                ),
+                xaxis=dict(
+                    title="Date",
+                    tickformat=("%b %d<br>%H:%M" if is_hourly else "%b %d"),
+                    hoverformat=("%b %d, %Y %H:%M" if is_hourly else "%b %d, %Y"),
+                ),
+                legend=dict(
+                    title=dict(
+                        text="Band",
+                        font=dict(
+                            size=11,
+                            family="Arial Bold",
+                        ),
+                    ),
+                    font=dict(
+                        size=10,
+                        family="Arial Bold",
+                    ),
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.22,
+                    xanchor="center",
+                    x=0.5,
+                ),
+                hovermode="x unified",
+                height=430,
+                margin=dict(
+                    l=40,
+                    r=30,
+                    t=65,
+                    b=90,
+                ),
+            )
+
+            band_payload_fig.update_traces(
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "%{x|%b %d, %Y}<br>"
+                    "Payload: %{y:.2f} GB"
+                    "<extra></extra>"
+                )
+            )
+
+            show_chart(
+                band_payload_fig,
+                use_container_width=True,
+            )
+
+# ============================================================
+# TIGHT CHART ROW SPACING
+# ============================================================
+# Reduce only the horizontal gap between rows that contain Plotly charts.
+# This keeps the controls/sidebar layout unchanged.
+st.markdown(
+    """
+    <style>
+    div[data-testid="stHorizontalBlock"]:has(.js-plotly-plot) {
+        gap: 0rem !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.js-plotly-plot) > div[data-testid="stColumn"] {
+        padding-left: 0rem !important;
+        padding-right: 0rem !important;
+        min-width: 0 !important;
+    }
+    div[data-testid="stPlotlyChart"] {
+        width: 100% !important;
+        max-width: none !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+    }
+    div[data-testid="stPlotlyChart"] > div {
+        width: 100% !important;
+        max-width: none !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+    }
+    div[data-testid="stPlotlyChart"] iframe {
+        width: 100% !important;
+        max-width: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ============================================================
+# CHARTS
+# ============================================================
+#
+# 1 KPI + 1 Sector = 1 independent chart.
+#
+# Horizontal:
+#   S1 | S2 | S3
+#   S4 | Indoor ...
+#
+# Vertical:
+#   S1
+#   S2
+#   S3
+#   S4
+#
+# All FreqBands inside the same Sector remain in that chart.
+# Legend = FULL Cell Name.
+# Payload = stacked area chart.
+# Other KPIs = line chart.
+# ============================================================
+
+two_chart_index = 0
+two_chart_cols = None
+
+# KPI Analysis is its own layout, so the normal KPI chart renderer is
+# completely bypassed when that layout is selected.
+main_chart_kpis = (
+    selected_kpis
+    if chart_layout != "KPI Analysis"
+    else []
+)
+
+for kpi_name in main_chart_kpis:
+
+    if chart_layout == "2 Charts":
+        if two_chart_index % 2 == 0:
+            two_chart_cols = st.columns(2, gap=None)
+        current_two_chart_col = two_chart_cols[two_chart_index % 2]
+        two_chart_index += 1
+    else:
+        current_two_chart_col = None
+
+    if kpi_name == "Total Payload Sector":
+        continue
+
+    config = KPI_CONFIG[kpi_name]
+    # ========================================================
+    # TA DISTRIBUTION
+    # ========================================================
+    if config.get("chart") == "ta_distribution":
+
+        ta_cols = [
+            f"L.RA.TA.UE.Index{i}"
+            for i in range(12)
+            if f"L.RA.TA.UE.Index{i}" in site_df.columns
+        ]
+
+        if not ta_cols:
+            st.warning("TA Distribution columns were not found in the uploaded CSV.")
+            continue
+
+        ta_ranges = [
+            "0-156 m",
+            "156-234 m",
+            "234-546 m",
+            "546-1014 m",
+            "1014-1950 m",
+            "1950-3510 m",
+            "3510-6630 m",
+            "6630-14430 m",
+            "14430-30030 m",
+            "30030-53430 m",
+            "53430-76830 m",
+            "76830 m+",
+        ]
+
+        for sector in selected_sectors:
+            sector_df = site_df[
+                site_df["_Sector_Search"] == sector
+            ].copy()
+
+            if sector_df.empty:
+                continue
+
+            rows = []
+            for idx, col in enumerate(ta_cols):
+                values = parse_kpi_numeric(
+                    sector_df[col]
+                ).fillna(0)
+
+                grouped = (
+                    pd.DataFrame({
+                        "_Cell_Display": sector_df["_Cell_Display"].astype(str),
+                        "_Value": values,
+                    })
+                    .groupby("_Cell_Display", as_index=False)["_Value"]
+                    .sum()
+                )
+                grouped["_TA_Range"] = ta_ranges[idx]
+                rows.append(grouped)
+
+            ta_df = pd.concat(rows, ignore_index=True)
+            ta_df["_TA_Range"] = pd.Categorical(
+                ta_df["_TA_Range"],
+                categories=ta_ranges,
+                ordered=True,
+            )
+
+            fig = px.bar(
+                ta_df,
+                x="_TA_Range",
+                y="_Value",
+                color="_Cell_Display",
+                barmode="group",
+                category_orders={"_TA_Range": ta_ranges},
+            )
+
+            fig.update_layout(
+                title=f"TA Distribution — {sector}",
+                xaxis=dict(title="TA Distance", tickangle=-35),
+                yaxis=dict(title="UE Count"),
+                height=450,
+                margin=dict(l=25, r=25, t=60, b=115),
+                legend=dict(
+                    title=dict(
+                        text="Cell Name",
+                        font=dict(size=12, family="Arial Black"),
+                    ),
+                    font=dict(size=11, family="Arial Black"),
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.25,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+
+            fig.update_traces(
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "TA: %{x}<br>"
+                    "UE: %{y:,.0f}<extra></extra>"
+                )
+            )
+
+            show_chart(fig, use_container_width=True)
+
+        continue
+
+    kpi_col = kpi_actual_columns[kpi_name]
+
+    work = site_df[
+        [
+            "_Date",
+            "_Cell_Display",
+            "_Sector_Search",
+            "_Sector_Display",
+            kpi_col,
+        ]
+    ].copy()
+
+    work["_KPI_Value"] = parse_kpi_numeric(
+        work[kpi_col]
+    )
+
+    work = work.dropna(subset=["_KPI_Value"])
+
+    if work.empty:
+        st.warning(
+            f"No numeric data available for {kpi_name}."
+        )
+        continue
+
+    chart_sectors = [
+        sector
+        for sector in selected_sectors
+        if sector in work["_Sector_Search"].unique()
+
+    ]
+
+    if not chart_sectors:
+        continue
+
+    def render_combined_chart(plot_df):
+        """Render one KPI chart containing all selected sectors/bands."""
+        plot_df = plot_df.copy()
+
+        if is_hourly:
+            plot_df["_Chart_Date"] = plot_df["_Date"]
+        else:
+            plot_df["_Chart_Date"] = plot_df["_Date"].dt.normalize()
+
+        plot_df = (
+            plot_df
+            .groupby(
+                ["_Chart_Date", "_Cell_Display"],
+                as_index=False,
+            )["_KPI_Value"]
+            .mean()
+            .sort_values("_Chart_Date")
+        )
+
+        # Preserve the existing hourly outage behavior.
+        if is_hourly and not plot_df.empty:
+            hourly_parts = []
+
+            for cell_name, cell_df in plot_df.groupby(
+                "_Cell_Display",
+                sort=False,
+            ):
+                cell_df = (
+                    cell_df
+                    .set_index("_Chart_Date")
+                    .sort_index()
+                )
+
+                full_hours = pd.date_range(
+                    start=cell_df.index.min(),
+                    end=cell_df.index.max(),
+                    freq="1h",
+                )
+
+                cell_df = cell_df.reindex(full_hours)
+                cell_df["_Cell_Display"] = cell_name
+                cell_df["_KPI_Value"] = (
+                    cell_df["_KPI_Value"]
+                    .fillna(0)
+                )
+                cell_df.index.name = "_Chart_Date"
+                hourly_parts.append(cell_df.reset_index())
+
+            if hourly_parts:
+                plot_df = pd.concat(
+                    hourly_parts,
+                    ignore_index=True,
+                ).sort_values(
+                    ["_Chart_Date", "_Cell_Display"]
+                )
+
+        if (
+            kpi_name == "Payload"
+            or config.get("chart") == "stacked"
+        ):
+            fig = px.area(
+                plot_df,
+                x="_Chart_Date",
+                y="_KPI_Value",
+                color="_Cell_Display",
+                markers=False,
+            )
+        else:
+            fig = px.line(
+                plot_df,
+                x="_Chart_Date",
+                y="_KPI_Value",
+                color="_Cell_Display",
+                markers=True,
+            )
+
+        # Excel-like time axis is preserved.
+        if is_hourly and not plot_df.empty:
+            tick_start = plot_df["_Chart_Date"].min().floor("4h")
+            tick_end = plot_df["_Chart_Date"].max().ceil("4h")
+            hourly_ticks = pd.date_range(
+                start=tick_start,
+                end=tick_end,
+                freq="4h",
+            )
+            hourly_tick_text = [
+                (
+                    f"{tick:%H:%M}<br>{tick:%Y-%m-%d}"
+                    if tick.hour == 0
+                    else f"{tick:%H:%M}<br>&nbsp;"
+                )
+                for tick in hourly_ticks
+            ]
+        else:
+            hourly_ticks = None
+            hourly_tick_text = None
+
+        fig.update_layout(
+            title=f"{kpi_name}",
+            yaxis=dict(title=""),
+            xaxis=dict(
+                title=("Date / Time" if is_hourly else "Date"),
+                tickmode=("array" if is_hourly else "auto"),
+                tickvals=hourly_ticks if is_hourly else None,
+                ticktext=hourly_tick_text if is_hourly else None,
+                tickangle=0,
+                tickfont=dict(size=9),
+                hoverformat=(
+                    "%Y-%m-%d %H:%M"
+                    if is_hourly
+                    else "%b %d, %Y"
+                ),
+            ),
+            hovermode="x unified",
+            height=470,
+            margin=dict(l=35, r=20, t=90, b=75),
+            legend=dict(
+                title=dict(
+                    text="Cell Name",
+                    font=dict(
+                        size=12,
+                        family="Arial Black",
+                    ),
+                ),
+                font=dict(
+                    size=10,
+                    family="Arial Black",
+                ),
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+            ),
+        )
+
+        fig.update_traces(
+            hovertemplate=(
+                "<b>%{fullData.name}</b><br>"
+                + (
+                    "%{x|%b %d, %Y %H:%M}<br>"
+                    if is_hourly
+                    else "%{x|%b %d, %Y}<br>"
+                )
+                + f"{kpi_name}: "
+                "%{y:.2f}"
+                f" {config['unit']}"
+                "<extra></extra>"
+            )
+        )
+
+        show_chart(
+            fig,
+            use_container_width=True,
+        )
+
+    def render_sector_chart(plot_df, sector):
+        plot_df = plot_df.copy()
+
+        # Daily CSV keeps the original daily trend.
+        # Hourly CSV preserves the Date + Time timestamp.
+        if is_hourly:
+            plot_df["_Chart_Date"] = plot_df["_Date"]
+        else:
+            plot_df["_Chart_Date"] = plot_df["_Date"].dt.normalize()
+
+        plot_df = (
+            plot_df
+            .groupby(
+                ["_Chart_Date", "_Cell_Display"],
+                as_index=False,
+            )["_KPI_Value"]
+            .mean()
+            .sort_values("_Chart_Date")
+        )
+
+        # --------------------------------------------------------
+        # Hourly outage handling:
+        # If an hourly record is missing between two available
+        # timestamps for the same Cell Name, treat the missing
+        # hour as 0. This makes a site/cell outage visible as a
+        # drop to zero instead of drawing a misleading diagonal
+        # line from the last available hour to the next one.
+        #
+        # Daily CSV behavior is unchanged.
+        # --------------------------------------------------------
+        if is_hourly and not plot_df.empty:
+            hourly_parts = []
+
+            for cell_name, cell_df in plot_df.groupby(
+                "_Cell_Display",
+                sort=False,
+            ):
+                cell_df = (
+                    cell_df
+                    .set_index("_Chart_Date")
+                    .sort_index()
+                )
+
+                # Keep the cell's own active time range so we do
+                # not create artificial zeros before/after it exists.
+                full_hours = pd.date_range(
+                    start=cell_df.index.min(),
+                    end=cell_df.index.max(),
+                    freq="1h",
+                )
+
+                cell_df = cell_df.reindex(full_hours)
+                cell_df["_Cell_Display"] = cell_name
+
+                # Missing hourly observations = outage / no data.
+                cell_df["_KPI_Value"] = (
+                    cell_df["_KPI_Value"]
+                    .fillna(0)
+                )
+
+                cell_df.index.name = "_Chart_Date"
+                hourly_parts.append(
+                    cell_df.reset_index()
+                )
+
+            plot_df = pd.concat(
+                hourly_parts,
+                ignore_index=True,
+            ).sort_values(
+                ["_Chart_Date", "_Cell_Display"]
+            )
+
+        if (
+            kpi_name == "Payload"
+            or config.get("chart") == "stacked"
+        ):
+            fig = px.area(
+                plot_df,
+                x="_Chart_Date",
+                y="_KPI_Value",
+                color="_Cell_Display",
+                markers=False,
+            )
+        else:
+            fig = px.line(
+                plot_df,
+                x="_Chart_Date",
+                y="_KPI_Value",
+                color="_Cell_Display",
+                markers=True,
+            )
+
+        if chart_layout == "Vertical":
+            chart_height = 520
+            margins = dict(l=30, r=30, t=70, b=30)
+            font_size = 10
+            legend_settings = dict(
+                title=dict(
+                    text="Cell Name",
+                    font=dict(
+                        size=12,
+                        family="Arial Black",
+                    ),
+                ),
+                font=dict(
+                    size=11,
+                    family="Arial Black",
+                ),
+            )
+        else:
+            chart_height = 450
+            margins = dict(l=8, r=15, t=90, b=75)
+            font_size = 9
+            legend_settings = dict(
+                title=dict(
+                    text="Cell Name",
+                    font=dict(
+                        size=12,
+                        family="Arial Black",
+                    ),
+                ),
+                font=dict(
+                    size=11,
+                    family="Arial Black",
+                ),
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+            )
+
+        # Excel-style hourly axis:
+        # hour on the first line, date underneath.
+        # Date is shown at 00:00 only to avoid the dense/overlapping
+        # date labels seen when every hourly tick carries a full date.
+        if is_hourly:
+            tick_start = plot_df["_Chart_Date"].min().floor("4h")
+            tick_end = plot_df["_Chart_Date"].max().ceil("4h")
+
+            hourly_ticks = pd.date_range(
+                start=tick_start,
+                end=tick_end,
+                freq="4h",
+            )
+
+            hourly_tick_text = [
+                (
+                    f"{tick:%H:%M}<br>{tick:%Y-%m-%d}"
+                    if tick.hour == 0
+                    else f"{tick:%H:%M}<br>&nbsp;"
+                )
+                for tick in hourly_ticks
+            ]
+        else:
+            hourly_ticks = None
+            hourly_tick_text = None
+
+        fig.update_layout(
+            title=f"{kpi_name} — {sector}",
+            yaxis=dict(
+                title="",
+            ),
+            xaxis=dict(
+                title=("Date / Time" if is_hourly else "Date"),
+                tickmode=("array" if is_hourly else "auto"),
+                tickvals=(
+                    hourly_ticks
+                    if is_hourly
+                    else None
+                ),
+                ticktext=(
+                    hourly_tick_text
+                    if is_hourly
+                    else None
+                ),
+                tickangle=0,
+                tickfont=dict(size=9),
+                hoverformat=(
+                    "%Y-%m-%d %H:%M"
+                    if is_hourly
+                    else "%b %d, %Y"
+                ),
+            ),
+            hovermode="x unified",
+            height=chart_height,
+            margin=margins,
+            font=dict(size=font_size),
+            legend=legend_settings,
+        )
+
+        fig.update_traces(
+            hovertemplate=(
+                "<b>%{fullData.name}</b><br>"
+                + (
+                    "%{x|%b %d, %Y %H:%M}<br>"
+                    if is_hourly
+                    else "%{x|%b %d, %Y}<br>"
+                )
+                + f"{kpi_name}: "
+                "%{y:.2f}"
+                f" {config['unit']}"
+                "<extra></extra>"
+            )
+        )
+
+        show_chart(
+            fig,
+            use_container_width=True,
+        )
+
+    if chart_layout == "2 Charts":
+        # One KPI chart can contain multiple selected sectors and bands.
+        # Two KPI charts are displayed side-by-side per row.
+        if not work.empty:
+            if current_two_chart_col is not None:
+                with current_two_chart_col:
+                    render_combined_chart(work)
+            else:
+                render_combined_chart(work)
+
+    elif chart_layout == "Vertical":
+
+        for sector in chart_sectors:
+
+            plot_df = work[
+                work["_Sector_Search"]
+                == sector
+            ].copy()
+
+            if not plot_df.empty:
+                render_sector_chart(
+                    plot_df,
+                    sector,
+                )
+
+    else:
+
+        charts_per_row = 3
+
+        for row_start in range(
+            0,
+            len(chart_sectors),
+            charts_per_row,
+        ):
+
+            row_sectors = chart_sectors[
+                row_start:row_start + charts_per_row
+            ]
+
+            cols = st.columns(len(row_sectors), gap=None)
+
+            for col, sector in zip(
+                cols,
+                row_sectors,
+            ):
+
+                with col:
+
+                    plot_df = work[
+                        work["_Sector_Display"]
+                        .astype(str)
+                        .str.strip()
+                        == sector
+                    ].copy()
+
+                    if not plot_df.empty:
+                        render_sector_chart(
+                            plot_df,
+                            sector,
+                        )
+
+# ============================================================
+# KPI ANALYSIS — 2 SIDE-BY-SIDE DIAGNOSTIC CHARTS
+# ============================================================
+#
+# Purpose:
+#   1) Traffic vs Availability:
+#      Site Payload + 4G Cell Availability
+#
+#   2) Accessibility / SSSR drill-down:
+#      SSSR + RRC Setup SR + E-RAB Setup SR + S1 Setup SR
+#
+# This is intentionally site-level and uses the complete selected
+# Site + Date Range data, before Sector/FreqBand chart filters.
+#
+# The second chart is a diagnostic view: when SSSR drops, the
+# component lines help identify which setup stage is degrading.
+# ============================================================
+
+def render_kpi_analysis():
+    if site_level_df.empty:
+        return
+
+    def actual_col(kpi_name):
+        col = kpi_actual_columns.get(kpi_name)
+        return col if col and col in site_level_df.columns else None
+
+    payload_col = actual_col("Payload")
+    availability_col = actual_col("4G Cell Availability")
+    sssr_col = actual_col("SSSR")
+    rrc_col = actual_col("RRC Setup SR")
+    erab_col = actual_col("E-RAB Setup SR")
+    s1_col = actual_col("S1 Setup SR")
+
+    if not any([
+        payload_col and availability_col,
+        sssr_col,
+    ]):
+        return
+
+    st.markdown("### 📊 Site Diagnostic Overview")
+    st.caption(
+        "Fixed site-level diagnostic overview: Traffic vs Availability "
+        "and SSSR setup-component drill-down."
+    )
+
+    # ------------------------------------------------------------
+    # Build one time axis for both charts.
+    # ------------------------------------------------------------
+    base_cols = ["_Date"]
+    for col in [
+        payload_col,
+        availability_col,
+        sssr_col,
+        rrc_col,
+        erab_col,
+        s1_col,
+    ]:
+        if col and col not in base_cols:
+            base_cols.append(col)
+
+    analysis_source = site_level_df[base_cols].copy()
+
+    if payload_col:
+        analysis_source["_Payload_Value"] = parse_kpi_numeric(
+            analysis_source[payload_col]
+        )
+    if availability_col:
+        analysis_source["_Availability_Value"] = parse_kpi_numeric(
+            analysis_source[availability_col]
+        )
+    if sssr_col:
+        analysis_source["_SSSR_Value"] = parse_kpi_numeric(
+            analysis_source[sssr_col]
+        )
+    if rrc_col:
+        analysis_source["_RRC_Value"] = parse_kpi_numeric(
+            analysis_source[rrc_col]
+        )
+    if erab_col:
+        analysis_source["_ERAB_Value"] = parse_kpi_numeric(
+            analysis_source[erab_col]
+        )
+    if s1_col:
+        analysis_source["_S1_Value"] = parse_kpi_numeric(
+            analysis_source[s1_col]
+        )
+
+    analysis_source["_Chart_Date"] = (
+        analysis_source["_Date"]
+        if is_hourly
+        else analysis_source["_Date"].dt.normalize()
+    )
+
+    agg_map = {}
+    if payload_col:
+        agg_map["Payload_GB"] = ("_Payload_Value", "sum")
+    if availability_col:
+        agg_map["Availability"] = ("_Availability_Value", "mean")
+    if sssr_col:
+        agg_map["SSSR"] = ("_SSSR_Value", "mean")
+    if rrc_col:
+        agg_map["RRC_Setup_SR"] = ("_RRC_Value", "mean")
+    if erab_col:
+        agg_map["ERAB_Setup_SR"] = ("_ERAB_Value", "mean")
+    if s1_col:
+        agg_map["S1_Setup_SR"] = ("_S1_Value", "mean")
+
+    analysis_df = (
+        analysis_source
+        .groupby("_Chart_Date", as_index=False)
+        .agg(**agg_map)
+        .sort_values("_Chart_Date")
+    )
+
+    if analysis_df.empty:
+        return
+
+    if is_hourly:
+        tickformat = "%H:%M<br>%d-%b"
+        hoverformat = "%d-%b-%Y %H:%M"
+        dtick = 6 * 60 * 60 * 1000
+    else:
+        tickformat = "%d-%b-%y"
+        hoverformat = "%d-%b-%Y"
+        dtick = None
+
+    # ------------------------------------------------------------
+    # CHART 1 — Payload + Availability
+    # ------------------------------------------------------------
+    fig_traffic = go.Figure()
+
+    if "Payload_GB" in analysis_df.columns:
+        fig_traffic.add_trace(
+            go.Bar(
+                x=analysis_df["_Chart_Date"],
+                y=analysis_df["Payload_GB"],
+                name="Site Payload (GB)",
+                yaxis="y2",
+                marker=dict(color="#8a8a8a"),
+                opacity=0.40,
+            )
+        )
+
+    if "Availability" in analysis_df.columns:
+        fig_traffic.add_trace(
+            go.Scatter(
+                x=analysis_df["_Chart_Date"],
+                y=analysis_df["Availability"],
+                name="4G Cell Availability (%)",
+                mode="lines+markers",
+                line=dict(color="#ED7D31", width=5),
+                marker=dict(size=6),
+                connectgaps=True,
+            )
+        )
+
+    fig_traffic.update_layout(
+        title="Traffic vs Availability",
+        height=430,
+        template="plotly_white",
+        margin=dict(l=48, r=48, t=55, b=90),
+        hovermode="x unified",
+        xaxis=dict(
+            title="Date / Time",
+            tickformat=tickformat,
+            hoverformat=hoverformat,
+            dtick=dtick,
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            range=[
+                analysis_df["_Chart_Date"].min(),
+                analysis_df["_Chart_Date"].max(),
+            ],
+            automargin=True,
+        ),
+        yaxis=dict(
+            title="Availability (%)",
+            range=[0, 120],
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            zeroline=False,
+        ),
+        yaxis2=dict(
+            title="Payload (GB)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            zeroline=False,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.20,
+            xanchor="center",
+            x=0.5,
+        ),
+        bargap=0.02,
+    )
+
+    fig_traffic.update_traces(
+        selector=dict(type="bar"),
+        hovertemplate=(
+            "<b>Site Payload</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Payload: %{y:.2f} GB<extra></extra>"
+        ),
+    )
+
+    fig_traffic.update_traces(
+        selector=dict(type="scatter"),
+        hovertemplate=(
+            "<b>%{fullData.name}</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Value: %{y:.2f}%<extra></extra>"
+        ),
+    )
+
+    # ------------------------------------------------------------
+    # CHART 2 — SSSR + Setup Components
+    # ------------------------------------------------------------
+    fig_access = go.Figure()
+
+    series_config = [
+        ("SSSR", "SSSR (%)", "#4472C4", 5),
+        ("RRC_Setup_SR", "RRC Setup SR (%)", "#ED7D31", 3),
+        ("ERAB_Setup_SR", "E-RAB Setup SR (%)", "#70AD47", 3),
+        ("S1_Setup_SR", "S1 Setup SR (%)", "#A64D79", 3),
+    ]
+
+    for data_key, label, color, width in series_config:
+        if data_key in analysis_df.columns:
+            fig_access.add_trace(
+                go.Scatter(
+                    x=analysis_df["_Chart_Date"],
+                    y=analysis_df[data_key],
+                    name=label,
+                    mode="lines+markers",
+                    line=dict(color=color, width=width),
+                    marker=dict(size=5 if data_key != "SSSR" else 7),
+                    connectgaps=True,
+                )
+            )
+
+    # SSSR target shown as a reference line because the supplied
+    # analysis example uses 99.0% as the target.
+    if "SSSR" in analysis_df.columns:
+        fig_access.add_hline(
+            y=99,
+            line=dict(
+                color="#00A878",
+                width=2,
+                dash="dash",
+            ),
+            annotation_text="SSSR Target 99%",
+            annotation_position="top left",
+            annotation_font=dict(size=9, color="#00875A"),
+        )
+
+    fig_access.update_layout(
+        title="SSSR Drill-down — Setup Components",
+        height=430,
+        template="plotly_white",
+        margin=dict(l=48, r=25, t=55, b=90),
+        hovermode="x unified",
+        xaxis=dict(
+            title="Date / Time",
+            tickformat=tickformat,
+            hoverformat=hoverformat,
+            dtick=dtick,
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            range=[
+                analysis_df["_Chart_Date"].min(),
+                analysis_df["_Chart_Date"].max(),
+            ],
+            automargin=True,
+        ),
+        yaxis=dict(
+            title="Success Rate (%)",
+            range=[80, 101],
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            zeroline=False,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.20,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+
+    fig_access.update_traces(
+        selector=dict(type="scatter"),
+        hovertemplate=(
+            "<b>%{fullData.name}</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Value: %{y:.2f}%<extra></extra>"
+        ),
+    )
+
+    # Collect both figures for the existing grouped-download workflow.
+    _download_figures.append(fig_traffic)
+    _download_figures.append(fig_access)
+
+    # Render side-by-side as requested.
+    col1, col2 = st.columns(2, gap="small")
+
+    with col1:
+        st.plotly_chart(
+            fig_traffic,
+            use_container_width=True,
+            key="kpi_analysis_traffic_availability",
+        )
+
+    with col2:
+        st.plotly_chart(
+            fig_access,
+            use_container_width=True,
+            key="kpi_analysis_sssr_components",
+        )
+
+
+
+# ============================================================
+# CONFIGURABLE KPI ANALYSIS BUILDER
+# ============================================================
+#
+# The existing KPI Analysis remains available, but this builder
+# lets the user choose the KPI combinations without editing code.
+#
+# The builder uses KPI_CONFIG / kpi_actual_columns already defined
+# by the dashboard and only exposes columns that actually exist.
+# ============================================================
+
+def render_configurable_kpi_analysis():
+    if site_level_df.empty:
+        return
+
+    st.markdown("---")
+    st.markdown("---")
+    st.markdown("## 📊 KPI Analysis")
+    st.caption(
+        "Independent analysis layout. Choose the primary KPI and related "
+        "KPIs to investigate the likely degradation driver."
+    )
+
+    available_kpis = [
+        name for name in KPI_CONFIG.keys()
+        if kpi_actual_columns.get(name) in site_level_df.columns
+    ]
+
+    if not available_kpis:
+        return
+
+    # ------------------------------------------------------------
+    # Independent KPI Analysis filters
+    # ------------------------------------------------------------
+    # Unlike the main dashboard Site Search, this section can analyze
+    # multiple sites and multiple Cell Names at the same time.
+    analysis_source = df.copy()
+
+    analysis_site_values = (
+        analysis_source["_Site_ID_Search"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+    analysis_site_values = sorted(
+        value for value in analysis_site_values.unique() if value
+    )
+
+    default_analysis_sites = (
+        [site_key]
+        if site_key in analysis_site_values
+        else analysis_site_values[:1]
+    )
+
+    # ------------------------------------------------------------
+    # Analysis scope + search mode
+    # ------------------------------------------------------------
+    # KPI Analysis can now be driven by either:
+    #   1) Site ID (SUM-....)
+    #   2) Full eNodeB Name (the original CSV value)
+    #
+    # This is independent from the top Site Search control, so a user can
+    # directly investigate a full eNodeB name at Site Level or Cell Level.
+    scope_col, search_col, site_col, cell_col = st.columns(
+        [1.0, 1.25, 2.0, 2.75],
+        gap="small",
+    )
+
+    with scope_col:
+        analysis_scope = st.radio(
+            "Analysis Level",
+            ["Site Level", "Cell Level"],
+            horizontal=True,
+            key="custom_kpi_analysis_scope",
+            help=(
+                "Site Level aggregates the selected site(s) without requiring "
+                "Cell Name selection. Cell Level enables Cell Name filtering."
+            ),
+        )
+
+    with search_col:
+        analysis_search_mode = st.radio(
+            "Analysis Search",
+            ["Site ID", "Full eNodeB Name"],
+            horizontal=True,
+            key="custom_kpi_analysis_search_mode",
+            help=(
+                "Choose whether KPI Analysis should be filtered by Site ID "
+                "or by the original full eNodeB Name from the CSV."
+            ),
+        )
+
+    if analysis_search_mode == "Site ID":
+        analysis_selector_values = analysis_site_values
+
+        default_analysis_selector = (
+            default_analysis_sites
+            if default_analysis_sites
+            else analysis_selector_values[:1]
+        )
+
+        analysis_selector_label = "Analysis Site ID"
+        analysis_selector_key = "custom_kpi_analysis_sites"
+
+    else:
+        analysis_selector_values = sorted(
+            value
+            for value in (
+                analysis_source["_eNodeB_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
+            if value
+        )
+
+        # Prefer the full eNodeB name belonging to the current top-level
+        # search result as the default when available.
+        default_analysis_selector = sorted(
+            value
+            for value in (
+                site_df["_eNodeB_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
+            if value
+        )
+
+        if not default_analysis_selector:
+            default_analysis_selector = analysis_selector_values[:1]
+
+        analysis_selector_label = "Analysis Full eNodeB Name"
+        analysis_selector_key = "custom_kpi_analysis_enodeb"
+
+    with site_col:
+        analysis_sites = st.multiselect(
+            analysis_selector_label,
+            analysis_selector_values,
+            default=default_analysis_selector,
+            key=analysis_selector_key,
+            help=(
+                "Select one or more "
+                + (
+                    "Site IDs."
+                    if analysis_search_mode == "Site ID"
+                    else "full eNodeB Names exactly as provided in the CSV."
+                )
+            ),
+        )
+
+    if analysis_search_mode == "Site ID":
+        site_filtered_source = analysis_source[
+            analysis_source["_Site_ID_Search"].isin(analysis_sites)
+        ].copy()
+    else:
+        site_filtered_source = analysis_source[
+            analysis_source["_eNodeB_Search"].isin(analysis_sites)
+        ].copy()
+
+    analysis_cell_values = sorted(
+        value
+        for value in (
+            site_filtered_source["_Cell_Display"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .unique()
+        )
+        if value
+    )
+
+    with cell_col:
+        if analysis_scope == "Cell Level":
+            analysis_cells = st.multiselect(
+                "Analysis Cell Name",
+                analysis_cell_values,
+                default=analysis_cell_values,
+                key="custom_kpi_analysis_cells",
+                help=(
+                    "Select one or more Cell Names. Cell Names remain the "
+                    "original CSV values."
+                ),
+            )
+        else:
+            analysis_cells = []
+            st.multiselect(
+                "Analysis Cell Name",
+                analysis_cell_values,
+                default=[],
+                disabled=True,
+                key="custom_kpi_analysis_cells_site_level",
+                help="Cell filtering is disabled in Site Level analysis.",
+            )
+
+    # Site Level = all cells belonging to the selected site(s).
+    # Cell Level = only the selected Cell Names.
+    analysis_df = site_filtered_source.copy()
+
+    if analysis_scope == "Cell Level":
+        if analysis_cells:
+            analysis_df = analysis_df[
+                analysis_df["_Cell_Display"].isin(analysis_cells)
+            ].copy()
+        else:
+            analysis_df = analysis_df.iloc[0:0].copy()
+
+    if (
+        isinstance(date_range, tuple)
+        and len(date_range) == 2
+    ):
+        analysis_start, analysis_end = date_range
+        analysis_df = analysis_df[
+            (analysis_df["_Date_Day"] >= pd.Timestamp(analysis_start))
+            & (analysis_df["_Date_Day"] <= pd.Timestamp(analysis_end))
+        ].copy()
+
+    if analysis_df.empty:
+        st.info("No data available for the selected Analysis filter / Cell Name.")
+        return
+
+    analysis_is_hourly = bool(analysis_df["_Is_Hourly"].any())
+
+    # Useful RNO-oriented presets.
+    preset_map = {
+        "Accessibility — SSSR drill-down": [
+            "SSSR",
+            "RRC Setup SR",
+            "E-RAB Setup SR",
+            "S1 Setup SR",
+        ],
+        "Traffic / Capacity": [
+            "Payload",
+            "HX4 DL PRB Utilization",
+            "HX4 UL PRB Utilization",
+            "Number of RRC Connected User",
+        ],
+        "Retainability": [
+            "E-RAB Drop",
+            "RRC Drop",
+            "E-RAB Abnormal Release",
+        ],
+        "Mobility": [
+            "HOSR",
+            "HO Preparation SR",
+            "HO Execution SR",
+        ],
+        "Radio / Coverage": [
+            "Average TA",
+            "CQI",
+            "UL RSSI",
+            "RSRP",
+            "RSRQ",
+        ],
+        "Traffic + Availability + TTI": [
+            "Payload",
+            "4G Cell Availability",
+            "Last TTI Ratio",
+        ],
+    }
+
+    preset_options = ["Custom"] + list(preset_map.keys())
+
+    c1, c2 = st.columns([1, 2], gap="small")
+
+    with c1:
+        preset = st.selectbox(
+            "Analysis Preset",
+            preset_options,
+            key="custom_kpi_analysis_preset",
+        )
+
+    default_selection = []
+    if preset != "Custom":
+        default_selection = [
+            k for k in preset_map[preset] if k in available_kpis
+        ]
+
+    with c2:
+        selected = st.multiselect(
+            "KPIs to Analyze",
+            available_kpis,
+            default=default_selection,
+            key="custom_kpi_analysis_selection",
+        )
+
+    if len(selected) < 2:
+        st.info("Select at least 2 KPIs to build the KPI Analysis.")
+        return
+
+    # Keep this analysis visually and logically independent from the
+    # fixed two-chart Site Diagnostic Overview above.
+    st.markdown("#### 🔎 KPI Analysis — Custom Combination")
+
+    c3, c4, c5, c6 = st.columns([1, 1, 1, 1], gap="small")
+
+    with c3:
+        primary_kpi = st.selectbox(
+            "Primary / Trigger KPI",
+            selected,
+            key="custom_kpi_analysis_primary",
+        )
+
+    with c4:
+        chart_mode = st.selectbox(
+            "Chart Mode",
+            [
+                "2 Charts — Primary + Related",
+                "1 Combined Chart",
+            ],
+            key="custom_kpi_analysis_mode",
+        )
+
+    with c5:
+        show_threshold = st.checkbox(
+            "Show threshold",
+            value=True,
+            key="custom_kpi_analysis_threshold",
+        )
+
+    with c6:
+        payload_display = st.selectbox(
+            "Payload Display",
+            ["Line", "Bar"],
+            index=0,
+            disabled=("Payload" not in selected),
+            key="custom_kpi_analysis_payload_display",
+            help=(
+                "Choose how Payload is displayed in KPI Analysis. "
+                "Line is recommended for comparing multiple cells; "
+                "Bar is useful for volume-oriented views."
+            ),
+        )
+
+    # Threshold is configurable instead of hard-coded.
+    threshold_default = 99.0
+    if primary_kpi.upper() in {"SSSR", "RRC SETUP SR", "E-RAB SETUP SR", "S1 SETUP SR"}:
+        threshold_default = 99.0
+    elif "AVAILABILITY" in primary_kpi.upper():
+        threshold_default = 99.0
+    elif "TTI" in primary_kpi.upper():
+        threshold_default = 35.0
+
+    threshold = st.number_input(
+        f"{primary_kpi} Threshold",
+        value=float(threshold_default),
+        step=0.5,
+        key="custom_kpi_analysis_threshold_value",
+    )
+
+    # ------------------------------------------------------------
+    # Prepare filtered multi-site / multi-cell time series.
+    # ------------------------------------------------------------
+    work = analysis_df[["_Date"]].copy()
+    work["_Chart_Date"] = (
+        work["_Date"]
+        if analysis_is_hourly
+        else work["_Date"].dt.normalize()
+    )
+
+    selected_columns = {}
+    for kpi in selected:
+        actual = kpi_actual_columns.get(kpi)
+        if not actual or actual not in analysis_df.columns:
+            continue
+
+        # Use the same filtered dataframe for both Site Level and Cell Level.
+        work[f"__{kpi}"] = parse_kpi_numeric(analysis_df[actual])
+        selected_columns[kpi] = f"__{kpi}"
+
+    if not selected_columns:
+        st.warning("Selected KPIs have no usable numeric data.")
+        return
+
+    agg_dict = {}
+    for kpi, tmp_col in selected_columns.items():
+        # Site-level aggregation follows the Site Level Summary convention:
+        # Payload = SUM, Last TTI Ratio = MAX, other KPI rates/metrics = MEAN.
+        kpi_upper = kpi.upper()
+        if kpi_upper == "PAYLOAD":
+            agg_dict[kpi] = (tmp_col, "sum")
+        elif kpi_upper == "LAST TTI RATIO":
+            agg_dict[kpi] = (tmp_col, "max")
+        else:
+            agg_dict[kpi] = (tmp_col, "mean")
+
+    # IMPORTANT FOR CELL-LEVEL COMPARISON:
+    # Do NOT collapse all selected cells into one row per date.
+    # Keep Cell Name in the grouping key so every cell gets its own
+    # trace/color in the KPI Analysis chart.
+    if analysis_scope == "Cell Level":
+        work["_Analysis_Cell"] = (
+            analysis_df["_Cell_Display"]
+            .astype(str)
+            .str.strip()
+            .values
+        )
+        custom_df = (
+            work.groupby(
+                ["_Chart_Date", "_Analysis_Cell"],
+                as_index=False,
+            )
+            .agg(**agg_dict)
+            .sort_values(["_Chart_Date", "_Analysis_Cell"])
+        )
+    else:
+        custom_df = (
+            work.groupby("_Chart_Date", as_index=False)
+            .agg(**agg_dict)
+            .sort_values("_Chart_Date")
+        )
+
+    if custom_df.empty:
+        st.warning("No data available for the selected KPI combination.")
+        return
+
+    # Detect hourly vs daily display.
+    if analysis_is_hourly:
+        tickformat = "%H:%M<br>%d-%b"
+        hoverformat = "%d-%b-%Y %H:%M"
+        dtick = 6 * 60 * 60 * 1000
+    else:
+        tickformat = "%d-%b-%y"
+        hoverformat = "%d-%b-%Y"
+        dtick = None
+
+    # ------------------------------------------------------------
+    # Chart factory.
+    # ------------------------------------------------------------
+    def make_custom_figure(kpis, title, include_threshold=False):
+        """
+        Build a KPI diagnostic combo chart.
+
+        IMPORTANT:
+        - With exactly 2 different KPIs, each KPI gets its OWN Y axis.
+          KPI #1 -> left axis (y)
+          KPI #2 -> right axis (y2)
+        - This is intentional for diagnostic analysis: e.g.
+          Payload vs Availability, SSSR vs RRC Setup SR, or
+          RANK2 Rate vs Average TA can be compared without one KPI
+          flattening the other because their numeric scales differ.
+        - Payload can be rendered as either BAR or LINE using the
+          Payload Display selector.
+        - For Cell Level comparison, LINE is recommended because each
+          selected Cell Name remains identifiable without stacked/overlapping
+          bars.
+        """
+        fig = go.Figure()
+
+        valid_kpis = [
+            k for k in kpis
+            if k in custom_df.columns
+        ]
+
+        if not valid_kpis:
+            return fig
+
+        # ------------------------------------------------------------
+        # TWO-KPI DIAGNOSTIC MODE
+        # ------------------------------------------------------------
+        # This is the key fix requested by the user:
+        # two different KPIs MUST NOT share the same numeric axis.
+        if len(valid_kpis) == 2:
+            kpi_left = valid_kpis[0]
+            kpi_right = valid_kpis[1]
+
+            def _numeric_values(k):
+                return pd.to_numeric(
+                    custom_df[k], errors="coerce"
+                )
+
+            # --------------------------------------------------------
+            # Cell Level: one color per Cell Name.
+            #
+            # Both KPIs belonging to the same cell use the SAME color,
+            # while the KPI itself is distinguished by line style:
+            #   solid = KPI #1
+            #   dash  = KPI #2
+            #
+            # Legend explicitly contains:
+            #   CELL_NAME — KPI
+            #
+            # This prevents the old problem where all selected cells
+            # were aggregated into one line and it became impossible
+            # to identify which cell was responsible.
+            # --------------------------------------------------------
+            if analysis_scope == "Cell Level" and "_Analysis_Cell" in custom_df.columns:
+                cells = [
+                    c for c in custom_df["_Analysis_Cell"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                ]
+
+                # Stable, deterministic palette. Plotly's standard
+                # qualitative palette is used only to distinguish cells.
+                cell_colors = (
+                    px.colors.qualitative.Plotly
+                    + px.colors.qualitative.D3
+                    + px.colors.qualitative.Safe
+                    + px.colors.qualitative.Dark24
+                )
+                color_map = {
+                    cell: cell_colors[i % len(cell_colors)]
+                    for i, cell in enumerate(sorted(cells))
+                }
+
+                all_left = pd.to_numeric(
+                    custom_df[kpi_left], errors="coerce"
+                )
+                all_right = pd.to_numeric(
+                    custom_df[kpi_right], errors="coerce"
+                )
+
+                def _axis_range(values):
+                    values = values.dropna()
+                    if values.empty:
+                        return [0, 1]
+
+                    vmin = float(values.min())
+                    vmax = float(values.max())
+
+                    if 0 <= vmin and vmax <= 105:
+                        return [0, max(100.0, vmax * 1.08)]
+
+                    span = vmax - vmin
+                    pad = max(
+                        span * 0.08,
+                        abs(vmax) * 0.05,
+                        1.0,
+                    )
+                    return [vmin - pad, vmax + pad]
+
+                left_range = _axis_range(all_left)
+                right_range = _axis_range(all_right)
+
+                left_is_payload = kpi_left.upper() == "PAYLOAD"
+                right_is_payload = kpi_right.upper() == "PAYLOAD"
+
+                for cell in sorted(cells):
+                    cell_df = custom_df[
+                        custom_df["_Analysis_Cell"].astype(str) == str(cell)
+                    ].sort_values("_Chart_Date")
+
+                    cell_color = color_map[cell]
+
+                    # KPI #1 -> LEFT AXIS
+                    if left_is_payload and payload_display == "Bar":
+                        fig.add_trace(
+                            go.Bar(
+                                x=cell_df["_Chart_Date"],
+                                y=pd.to_numeric(
+                                    cell_df[kpi_left],
+                                    errors="coerce",
+                                ),
+                                name=f"{cell} — {kpi_left}",
+                                legendgroup=cell,
+                                marker_color=cell_color,
+                                marker_line_width=0,
+                                opacity=0.30,
+                                yaxis="y",
+                            )
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=cell_df["_Chart_Date"],
+                                y=pd.to_numeric(
+                                    cell_df[kpi_left],
+                                    errors="coerce",
+                                ),
+                                name=f"{cell} — {kpi_left}",
+                                legendgroup=cell,
+                                mode="lines+markers",
+                                line=dict(
+                                    color=cell_color,
+                                    width=7 if kpi_left == primary_kpi else 5,
+                                    dash=(
+                                        "dash"
+                                        if left_is_payload
+                                        else "solid"
+                                    ),
+                                ),
+                                marker=dict(
+                                    size=7 if kpi_left == primary_kpi else 6,
+                                    color=cell_color,
+                                ),
+                                connectgaps=True,
+                                yaxis="y",
+                            )
+                        )
+
+                    # KPI #2 -> RIGHT AXIS
+                    if right_is_payload and payload_display == "Bar":
+                        fig.add_trace(
+                            go.Bar(
+                                x=cell_df["_Chart_Date"],
+                                y=pd.to_numeric(
+                                    cell_df[kpi_right],
+                                    errors="coerce",
+                                ),
+                                name=f"{cell} — {kpi_right}",
+                                legendgroup=cell,
+                                marker_color=cell_color,
+                                marker_line_width=0,
+                                opacity=0.30,
+                                yaxis="y2",
+                            )
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=cell_df["_Chart_Date"],
+                                y=pd.to_numeric(
+                                    cell_df[kpi_right],
+                                    errors="coerce",
+                                ),
+                                name=f"{cell} — {kpi_right}",
+                                legendgroup=cell,
+                                mode="lines+markers",
+                                line=dict(
+                                    color=cell_color,
+                                    width=7 if kpi_right == primary_kpi else 5,
+                                    dash=(
+                                        "dash"
+                                        if right_is_payload
+                                        else "dash"
+                                    ),
+                                ),
+                                marker=dict(
+                                    size=7 if kpi_right == primary_kpi else 6,
+                                    color=cell_color,
+                                ),
+                                connectgaps=True,
+                                yaxis="y2",
+                            )
+                        )
+
+                if include_threshold:
+                    threshold_axis = (
+                        "y"
+                        if primary_kpi == kpi_left
+                        else "y2"
+                    )
+                    fig.add_hline(
+                        y=float(threshold),
+                        line=dict(
+                            color="red",
+                            width=2,
+                            dash="dash",
+                        ),
+                        annotation_text=(
+                            f"{primary_kpi} Threshold "
+                            f"{threshold:g}"
+                            + (
+                                "%"
+                                if primary_kpi.upper() != "PAYLOAD"
+                                else ""
+                            )
+                        ),
+                        annotation_position="top left",
+                        yref=threshold_axis,
+                    )
+
+                custom_x_pad = _bar_xaxis_padding(
+                    custom_df["_Chart_Date"]
+                )
+                custom_x_range = [
+                    custom_df["_Chart_Date"].min() - custom_x_pad,
+                    custom_df["_Chart_Date"].max() + custom_x_pad,
+                ]
+
+                def _axis_title(kpi):
+                    if kpi.upper() == "PAYLOAD":
+                        return "Payload (GB)"
+                    if (
+                        "AVAILABILITY" in kpi.upper()
+                        or "%" in kpi.upper()
+                        or "RATE" in kpi.upper()
+                        or "SSSR" in kpi.upper()
+                    ):
+                        return f"{kpi} (%)"
+                    return kpi
+
+                fig.update_layout(
+                    title=title,
+                    height=520,
+                    template="plotly_white",
+                    margin=dict(l=58, r=68, t=55, b=150),
+                    hovermode="x unified",
+                    barmode="overlay",
+                    xaxis=dict(
+                        title="Date / Time",
+                        tickformat=tickformat,
+                        hoverformat=hoverformat,
+                        dtick=dtick,
+                        showgrid=True,
+                        gridcolor="#e5e5e5",
+                        automargin=True,
+                        range=custom_x_range,
+                        autorange=False,
+                    ),
+                    yaxis=dict(
+                        title=_axis_title(kpi_left),
+                        range=left_range,
+                        showgrid=True,
+                        gridcolor="#e5e5e5",
+                        automargin=True,
+                        side="left",
+                    ),
+                    yaxis2=dict(
+                        title=_axis_title(kpi_right),
+                        range=right_range,
+                        overlaying="y",
+                        side="right",
+                        showgrid=False,
+                        automargin=True,
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top",
+                        y=-0.22,
+                        xanchor="center",
+                        x=0.5,
+                        traceorder="normal",
+                    ),
+                )
+
+                return fig
+
+            # --------------------------------------------------------
+            # Site Level: retain the previous site-level double-axis
+            # behavior (one aggregated series per KPI).
+            # --------------------------------------------------------
+            def _axis_range(values):
+                values = values.dropna()
+                if values.empty:
+                    return [0, 1]
+
+                vmin = float(values.min())
+                vmax = float(values.max())
+
+                if 0 <= vmin and vmax <= 105:
+                    return [0, max(100.0, vmax * 1.08)]
+
+                span = vmax - vmin
+                pad = max(
+                    span * 0.08,
+                    abs(vmax) * 0.05,
+                    1.0,
+                )
+                return [vmin - pad, vmax + pad]
+
+            left_values = _numeric_values(kpi_left)
+            right_values = _numeric_values(kpi_right)
+
+            left_range = _axis_range(left_values)
+            right_range = _axis_range(right_values)
+
+            left_is_payload = kpi_left.upper() == "PAYLOAD"
+            right_is_payload = kpi_right.upper() == "PAYLOAD"
+
+            if left_is_payload and payload_display == "Bar":
+                fig.add_trace(
+                    go.Bar(
+                        x=custom_df["_Chart_Date"],
+                        y=left_values,
+                        name=kpi_left,
+                        yaxis="y",
+                        opacity=0.45,
+                        marker_line_width=0,
+                    )
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=custom_df["_Chart_Date"],
+                        y=left_values,
+                        name=kpi_left,
+                        yaxis="y",
+                        mode="lines+markers",
+                        line=dict(
+                            width=7 if kpi_left == primary_kpi else 5,
+                            dash="dash" if left_is_payload else "solid",
+                        ),
+                        marker=dict(
+                            size=7 if kpi_left == primary_kpi else 6
+                        ),
+                        connectgaps=True,
+                    )
+                )
+
+            if right_is_payload and payload_display == "Bar":
+                fig.add_trace(
+                    go.Bar(
+                        x=custom_df["_Chart_Date"],
+                        y=right_values,
+                        name=kpi_right,
+                        yaxis="y2",
+                        opacity=0.45,
+                        marker_line_width=0,
+                    )
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=custom_df["_Chart_Date"],
+                        y=right_values,
+                        name=kpi_right,
+                        yaxis="y2",
+                        mode="lines+markers",
+                        line=dict(
+                            width=7 if kpi_right == primary_kpi else 5,
+                            dash="dash" if right_is_payload else "dash",
+                        ),
+                        marker=dict(
+                            size=7 if kpi_right == primary_kpi else 6
+                        ),
+                        connectgaps=True,
+                    )
+                )
+
+            if include_threshold:
+                threshold_axis = (
+                    "y" if primary_kpi == kpi_left else "y2"
+                )
+                fig.add_hline(
+                    y=float(threshold),
+                    line=dict(
+                        color="red",
+                        width=2,
+                        dash="dash",
+                    ),
+                    annotation_text=(
+                        f"{primary_kpi} Threshold "
+                        f"{threshold:g}"
+                        + (
+                            "%"
+                            if primary_kpi.upper() != "PAYLOAD"
+                            else ""
+                        )
+                    ),
+                    annotation_position="top left",
+                    yref=threshold_axis,
+                )
+
+            custom_x_pad = _bar_xaxis_padding(
+                custom_df["_Chart_Date"]
+            )
+            custom_x_range = [
+                custom_df["_Chart_Date"].min() - custom_x_pad,
+                custom_df["_Chart_Date"].max() + custom_x_pad,
+            ]
+
+            def _axis_title(kpi):
+                if kpi.upper() == "PAYLOAD":
+                    return "Payload (GB)"
+                if (
+                    "AVAILABILITY" in kpi.upper()
+                    or "%" in kpi.upper()
+                    or "RATE" in kpi.upper()
+                    or "SSSR" in kpi.upper()
+                ):
+                    return f"{kpi} (%)"
+                return kpi
+
+            fig.update_layout(
+                title=title,
+                height=430,
+                template="plotly_white",
+                margin=dict(
+                    l=58, r=68, t=55, b=90
+                ),
+                hovermode="x unified",
+                barmode="overlay",
+                xaxis=dict(
+                    title="Date / Time",
+                    tickformat=tickformat,
+                    hoverformat=hoverformat,
+                    dtick=dtick,
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                    range=custom_x_range,
+                    autorange=False,
+                ),
+                yaxis=dict(
+                    title=_axis_title(kpi_left),
+                    range=left_range,
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                    side="left",
+                ),
+                yaxis2=dict(
+                    title=_axis_title(kpi_right),
+                    range=right_range,
+                    overlaying="y",
+                    side="right",
+                    showgrid=False,
+                    automargin=True,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.20,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+
+            return fig
+
+        # ------------------------------------------------------------
+        # FALLBACK FOR 1 OR 3+ KPIs
+        # ------------------------------------------------------------
+        # Keep the existing behavior for combinations other than exactly
+        # two KPIs. Payload still follows the Bar/Line display selector.
+        non_payload_kpis = [
+            k for k in valid_kpis
+            if k.upper() != "PAYLOAD"
+        ]
+        has_payload = any(
+            k.upper() == "PAYLOAD"
+            for k in valid_kpis
+        )
+
+        if has_payload:
+            payload_kpi = next(
+                k for k in valid_kpis
+                if k.upper() == "PAYLOAD"
+            )
+            payload_values = pd.to_numeric(
+                custom_df[payload_kpi],
+                errors="coerce",
+            )
+
+            if payload_display == "Bar":
+                fig.add_trace(
+                    go.Bar(
+                        x=custom_df["_Chart_Date"],
+                        y=payload_values,
+                        name=payload_kpi,
+                        yaxis="y2",
+                        opacity=0.38,
+                        marker_line_width=0,
+                    )
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=custom_df["_Chart_Date"],
+                        y=payload_values,
+                        name=payload_kpi,
+                        yaxis="y2",
+                        mode="lines+markers",
+                        line=dict(
+                            width=7 if payload_kpi == primary_kpi else 5,
+                            dash="dash",
+                        ),
+                        marker=dict(
+                            size=7 if payload_kpi == primary_kpi else 6,
+                        ),
+                        connectgaps=True,
+                    )
+                )
+
+        for idx, kpi in enumerate(non_payload_kpis):
+            width = 7 if kpi == primary_kpi else 5
+            marker_size = 7 if kpi == primary_kpi else 6
+
+            fig.add_trace(
+                go.Scatter(
+                    x=custom_df["_Chart_Date"],
+                    y=pd.to_numeric(
+                        custom_df[kpi],
+                        errors="coerce",
+                    ),
+                    name=kpi,
+                    yaxis="y",
+                    mode="lines+markers",
+                    line=dict(width=width),
+                    marker=dict(size=marker_size),
+                    connectgaps=True,
+                )
+            )
+
+        has_availability = any(
+            "AVAILABILITY" in k.upper()
+            for k in non_payload_kpis
+        )
+
+        if has_availability:
+            left_axis_range = [0, 105]
+            left_axis_title = "KPI (%)"
+        elif non_payload_kpis:
+            vals = pd.concat(
+                [
+                    pd.to_numeric(
+                        custom_df[k],
+                        errors="coerce",
+                    )
+                    for k in non_payload_kpis
+                ],
+                ignore_index=True,
+            ).dropna()
+
+            if len(vals):
+                vmax = float(vals.max())
+                left_axis_range = [
+                    0,
+                    max(100.0, vmax * 1.08),
+                ]
+            else:
+                left_axis_range = [0, 100]
+
+            left_axis_title = "KPI"
+        else:
+            left_axis_range = [0, 1]
+            left_axis_title = ""
+
+        if include_threshold:
+            threshold_ref = (
+                "y2"
+                if primary_kpi.upper() == "PAYLOAD"
+                and has_payload
+                else "y"
+            )
+
+            fig.add_hline(
+                y=float(threshold),
+                line=dict(
+                    color="red",
+                    width=2,
+                    dash="dash",
+                ),
+                annotation_text=(
+                    f"{primary_kpi} Threshold "
+                    f"{threshold:g}"
+                ),
+                annotation_position="top left",
+                yref=threshold_ref,
+            )
+
+        if has_payload and not custom_df.empty:
+            custom_x_pad = _bar_xaxis_padding(
+                custom_df["_Chart_Date"]
+            )
+            custom_x_range = [
+                custom_df["_Chart_Date"].min()
+                - custom_x_pad,
+                custom_df["_Chart_Date"].max()
+                + custom_x_pad,
+            ]
+        else:
+            custom_x_range = None
+
+        fig.update_layout(
+            title=title,
+            height=430,
+            template="plotly_white",
+            margin=dict(
+                l=48, r=58, t=55, b=90
+            ),
+            hovermode="x unified",
+            barmode="overlay",
+            xaxis=dict(
+                title="Date / Time",
+                tickformat=tickformat,
+                hoverformat=hoverformat,
+                dtick=dtick,
+                showgrid=True,
+                gridcolor="#e5e5e5",
+                automargin=True,
+                range=custom_x_range,
+                autorange=(
+                    False
+                    if custom_x_range is not None
+                    else True
+                ),
+            ),
+            yaxis=dict(
+                title=left_axis_title,
+                range=left_axis_range,
+                showgrid=True,
+                gridcolor="#e5e5e5",
+                automargin=True,
+            ),
+            yaxis2=dict(
+                title="Payload (GB)" if has_payload else "",
+                overlaying="y",
+                side="right",
+                showgrid=False,
+                automargin=True,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.20,
+                xanchor="center",
+                x=0.5,
+            ),
+        )
+
+        return fig
+
+    related = [k for k in selected if k != primary_kpi]
+
+    if chart_mode == "2 Charts — Primary + Related":
+        fig_primary = make_custom_figure(
+            [primary_kpi],
+            f"{primary_kpi} — Primary KPI",
+            include_threshold=show_threshold,
+        )
+        fig_related = make_custom_figure(
+            related,
+            f"{primary_kpi} — Related KPI Drill-down",
+            include_threshold=False,
+        )
+
+        _download_figures.append(fig_primary)
+        _download_figures.append(fig_related)
+
+        left, right = st.columns(2, gap="small")
+        with left:
+            st.plotly_chart(
+                fig_primary,
+                use_container_width=True,
+                key="custom_kpi_analysis_primary_chart",
+            )
+        with right:
+            st.plotly_chart(
+                fig_related,
+                use_container_width=True,
+                key="custom_kpi_analysis_related_chart",
+            )
+
+    else:
+        fig_combined = make_custom_figure(
+            selected,
+            f"{primary_kpi} — Combined KPI Analysis",
+            include_threshold=show_threshold,
+        )
+
+        _download_figures.append(fig_combined)
+
+        st.plotly_chart(
+            fig_combined,
+            use_container_width=True,
+            key="custom_kpi_analysis_combined_chart",
+        )
+
+    if analysis_scope == "Site Level":
+        scope_text = (
+            f"Analysis scope: Site Level — {len(analysis_sites)} site(s), "
+            "all Cell Names under the selected site(s)."
+        )
+    else:
+        scope_text = (
+            f"Analysis scope: Cell Level — {len(analysis_sites)} site(s), "
+            f"{len(analysis_cells)} Cell Name(s)."
+        )
+
+    st.caption(
+        scope_text + " "
+        "RNO interpretation: use the primary KPI as the trigger, then "
+        "compare the related KPI movements at the same Date / Time. "
+        "A correlation is an indicator for investigation, not by itself "
+        "a final root-cause conclusion."
+    )
+
+
+def _bar_xaxis_padding(series):
+    """Return half the smallest positive time interval for bar-edge padding."""
+    s = pd.to_datetime(series, errors="coerce").dropna().sort_values().drop_duplicates()
+    if len(s) < 2:
+        return pd.Timedelta(hours=12)
+    diffs = s.diff().dropna()
+    diffs = diffs[diffs > pd.Timedelta(0)]
+    if diffs.empty:
+        return pd.Timedelta(hours=12)
+    return diffs.min() / 2
+
+
+# KPI Analysis is a fourth, independent Chart Layout.
+# When selected, the normal Horizontal / Vertical / 2 Charts renderer
+# is bypassed and the dedicated analysis sections are shown instead.
+if chart_layout == "KPI Analysis":
+    render_configurable_kpi_analysis()
+    render_kpi_analysis()
+
+
+# ============================================================
+# SITE LEVEL SUMMARY — ALWAYS AT THE BOTTOM
+# ============================================================
+#
+# Excel-style site summary:
+#   - Total Payload (GB)      -> SUM, shown as bars
+#   - Last TTI Ratio (%)      -> MAX, shown as line
+#   - 4G Cell Availability(%) -> AVERAGE, shown as line
+#
+# This chart is independent of the selected KPI menu and is shown
+# at the bottom of every chart layout (Horizontal / Vertical /
+# 2 Charts / KPI Analysis). It uses the complete selected Site + Date Range data,
+# before Sector/FreqBand chart filters are applied.
+# ============================================================
+
+def _bar_xaxis_padding(series):
+    """Return half the smallest positive time interval for bar-edge padding."""
+    s = pd.to_datetime(series, errors="coerce").dropna().sort_values().drop_duplicates()
+    if len(s) < 2:
+        # A single point still needs a visible bar width.
+        return pd.Timedelta(hours=12)
+    diffs = s.diff().dropna()
+    diffs = diffs[diffs > pd.Timedelta(0)]
+    if diffs.empty:
+        return pd.Timedelta(hours=12)
+    return diffs.min() / 2
+
+
+def render_site_level_summary():
+    if site_level_df.empty:
+        return
+
+    payload_col = kpi_actual_columns.get("Payload")
+    availability_col = kpi_actual_columns.get("4G Cell Availability")
+    last_tti_col = kpi_actual_columns.get("Last TTI Ratio")
+
+    required_cols = [
+        c for c in [payload_col, availability_col, last_tti_col]
+        if c and c in site_level_df.columns
+    ]
+
+    if not required_cols:
+        return
+
+    summary_source = site_level_df[
+        ["_Date"]
+        + required_cols
+    ].copy()
+
+    summary_source["_Payload_Value"] = (
+        parse_kpi_numeric(summary_source[payload_col])
+        if payload_col and payload_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Availability_Value"] = (
+        parse_kpi_numeric(summary_source[availability_col])
+        if availability_col and availability_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Last_TTI_Value"] = (
+        parse_kpi_numeric(summary_source[last_tti_col])
+        if last_tti_col and last_tti_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Chart_Date"] = (
+        summary_source["_Date"]
+        if is_hourly
+        else summary_source["_Date"].dt.normalize()
+    )
+
+    summary_df = (
+        summary_source
+        .groupby("_Chart_Date", as_index=False)
+        .agg(
+            Total_Payload_GB=("_Payload_Value", "sum"),
+            Max_Last_TTI_Ratio=("_Last_TTI_Value", "max"),
+            Avg_4G_Cell_Availability=("_Availability_Value", "mean"),
+        )
+        .sort_values("_Chart_Date")
+    )
+
+    if summary_df.empty:
+        return
+
+    # Build an Excel-like combo chart:
+    # Payload = bars on the right axis
+    # Last TTI + Availability = lines on the left axis
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Total_Payload_GB"],
+            name="Average of 4GTotalPayloadGB",
+            yaxis="y2",
+            opacity=0.70,
+            marker=dict(color="#8a8a8a"),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Max_Last_TTI_Ratio"],
+            name="Max of Last TTI Ratio %",
+            mode="lines+markers",
+            line=dict(color="#4472C4", width=7.0),
+            marker=dict(size=10),
+            connectgaps=True,
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Avg_4G_Cell_Availability"],
+            name="Average of 4G Cell Availability(%)",
+            mode="lines+markers",
+            line=dict(color="#ED7D31", width=7.0),
+            marker=dict(size=9),
+            connectgaps=True,
+        )
+    )
+
+    # Keep both KPI lines visually in front of the Payload bars.
+    # Plotly renders later traces above earlier traces.
+    bars = [trace for trace in fig.data if trace.type == "bar"]
+    lines = [trace for trace in fig.data if trace.type == "scatter"]
+    fig.data = tuple(bars + lines)
+
+    # Explicitly keep KPI lines above the Payload bars.
+    for trace in lines:
+        try:
+            trace.zorder = 100
+        except Exception:
+            pass
+
+    if is_hourly:
+        x_title = "Date / Time"
+        tickformat = "%H:%M<br>%d-%b"
+        hoverformat = "%d-%b-%Y %H:%M"
+    else:
+        x_title = "Date"
+        tickformat = "%d-%b-%y"
+        hoverformat = "%d-%b-%Y"
+
+    # TTI threshold = 35%, shown as a red dashed reference line.
+    # Keep it on the primary (TTI / Availability) axis.
+    fig.add_hline(
+        y=35,
+        line=dict(
+            color="#FF0000",
+            width=2,
+            dash="dash",
+        ),
+        layer="below",
+        annotation_text="TTI Threshold 35%",
+        annotation_position="top left",
+        annotation_font=dict(size=10, color="#FF0000"),
+    )
+
+    # Extend the datetime axis by half a bar interval on both sides.
+    # Without this padding, Plotly centers the first/last bars on the
+    # boundary and clips half of each bar, creating visible left/right gaps.
+    site_x_pad = _bar_xaxis_padding(summary_df["_Chart_Date"])
+    site_x_min = summary_df["_Chart_Date"].min() - site_x_pad
+    site_x_max = summary_df["_Chart_Date"].max() + site_x_pad
+
+    fig.update_layout(
+        title="Site Level Summary",
+        xaxis=dict(
+            title=x_title,
+            tickformat=tickformat,
+            hoverformat=hoverformat,
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            automargin=False,
+            domain=[0.0, 1.0],
+            range=[site_x_min, site_x_max],
+            autorange=False,
+            # Show actual time-of-day on the hourly chart.
+            # 6-hour spacing keeps the chart readable while showing
+            # when a TTI drop occurred.
+            dtick=6 * 60 * 60 * 1000 if is_hourly else None,
+        ),
+        yaxis=dict(
+            title="Last TTI Ratio % / Availability %",
+            range=[0, 120],
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            zeroline=False,
+        ),
+        yaxis2=dict(
+            title="Payload (GB)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            zeroline=False,
+        ),
+        hovermode="x unified",
+        height=500,
+        margin=dict(l=18, r=0, t=60, b=72),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            font=dict(
+                family="Arial",
+                size=11,
+            ),
+        ),
+        bargap=0.03,
+        template="plotly_white",
+    )
+
+    fig.update_traces(
+        selector=dict(type="bar"),
+        hovertemplate=(
+            "<b>Site Total Payload</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Payload: %{y:.2f} GB"
+            "<extra></extra>"
+        ),
+    )
+
+    fig.update_traces(
+        selector=dict(type="scatter"),
+        hovertemplate=(
+            "<b>%{fullData.name}</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Value: %{y:.2f}"
+            "<extra></extra>"
+        ),
+    )
+
+    # Add to the grouped JPEG collection and render last.
+    show_chart(
+        fig,
+        use_container_width=True,
+        compact_summary=True,
+    )
+
+
+render_site_level_summary()
+
+# ============================================================
+# DEBUG
+# ============================================================
+with st.expander(
+    "Debug — Filtered data preview"
+):
+
+    debug_cols = [
+        enodeb_col,
+        cell_col,
+        localcell_col,
+        "_Site_ID",
+        "_Date",
+        "_Sector_Display",
+        "_FreqBand",
+    ]
+
+    debug_cols += [
+        KPI_CONFIG[k]["column"]
+        for k in selected_kpis
+    ]
+
+    debug_cols = [
+        c
+        for c in dict.fromkeys(debug_cols)
+        if c in site_df.columns
+    ]
+
+    st.dataframe(
+        site_df[debug_cols].head(1000),
+        use_container_width=True,
+    )
+
+
+
+
+
+# ============================================================
+# DOWNLOAD — GROUPED JPEG CAPTURE
+# ============================================================
+def _plotly_fig_to_jpeg(fig_obj):
+    """
+    Render a Plotly figure to JPEG using Matplotlib.
+    This avoids Kaleido/Chrome completely, which is important on
+    Streamlit Cloud where Chrome may not be installed.
+    """
+    fig = plt.figure(figsize=(14, 6.5), dpi=120)
+    ax = fig.add_subplot(111)
+
+    title = getattr(fig_obj.layout.title, "text", None)
+    if title:
+        ax.set_title(title, loc="left", fontweight="bold")
+
+    x_title = getattr(fig_obj.layout.xaxis.title, "text", None)
+    y_title = getattr(fig_obj.layout.yaxis.title, "text", None)
+
+    for trace in fig_obj.data:
+        x = list(trace.x) if trace.x is not None else list(range(len(trace.y or [])))
+        y = list(trace.y) if trace.y is not None else []
+
+        name = trace.name or ""
+
+        # Plotly scatter/line/area traces.
+        if trace.type == "scatter":
+            mode = trace.mode or "lines"
+            fill = trace.fill
+
+            if fill and fill != "none":
+                ax.fill_between(x, y, alpha=0.25, label=name)
+                ax.plot(x, y, linewidth=1.8, label=name)
+            elif "markers" in mode and "lines" in mode:
+                ax.plot(x, y, marker="o", markersize=2.5,
+                        linewidth=1.2, label=name)
+            elif "markers" in mode:
+                ax.plot(x, y, marker="o", linestyle="None",
+                        markersize=2.5, label=name)
+            else:
+                ax.plot(x, y, linewidth=1.8, label=name)
+
+        # Bar traces, including TA Distribution.
+        elif trace.type == "bar":
+            width = 0.75
+            ax.bar(x, y, width=width, label=name, alpha=0.85)
+
+    if x_title:
+        ax.set_xlabel(x_title)
+    if y_title:
+        ax.set_ylabel(y_title)
+
+    # Make time-series axes readable.
+    try:
+        if any(hasattr(v, "year") for v in x if v is not None):
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            ax.xaxis.set_major_formatter(
+                mdates.DateFormatter("%H:%M\n%d/%m/%Y")
+            )
+    except Exception:
+        pass
+
+    ax.grid(True, alpha=0.25)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.16),
+        ncol=min(4, max(1, len(ax.get_legend_handles_labels()[0]))),
+        fontsize=8,
+        frameon=False,
+    )
+
+    fig.tight_layout()
+    buffer = BytesIO()
+    fig.savefig(buffer, format="jpeg", bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+
+    return Image.open(buffer).convert("RGB")
+
+
+if _download_figures:
+    st.divider()
+    st.subheader("Download Charts")
+
+    st.caption(
+        "Download all currently displayed KPI charts as one grouped JPEG image."
+    )
+
+    if st.button("🖼️ Prepare Grouped JPEG", use_container_width=False):
+        with st.spinner("Preparing grouped JPEG..."):
+            rendered_images = [
+                _plotly_fig_to_jpeg(fig_obj)
+                for fig_obj in _download_figures
+            ]
+
+            max_width = max(img.width for img in rendered_images)
+            total_height = sum(img.height for img in rendered_images)
+
+            grouped_image = Image.new(
+                "RGB",
+                (max_width, total_height),
+                "white",
+            )
+
+            y_offset = 0
+            for img in rendered_images:
+                x_offset = (max_width - img.width) // 2
+                grouped_image.paste(img, (x_offset, y_offset))
+                y_offset += img.height
+
+            output_buffer = BytesIO()
+            grouped_image.save(
+                output_buffer,
+                format="JPEG",
+                quality=92,
+                optimize=True,
+            )
+            output_buffer.seek(0)
+
+            st.session_state["grouped_jpeg"] = output_buffer.getvalue()
+
+    if "grouped_jpeg" in st.session_state:
+        st.download_button(
+            label="⬇️ Download Grouped JPEG",
+            data=st.session_state["grouped_jpeg"],
+            file_name="RAN_KPI_Dashboard_Grouped_Charts.jpg",
+            mime="image/jpeg",
+            use_container_width=False,
+        )
+
+    if st.button("📦 Prepare Individual JPEG ZIP", use_container_width=False):
+        with st.spinner("Preparing JPEG ZIP..."):
+            zip_buffer = BytesIO()
+
+            with zipfile.ZipFile(
+                zip_buffer,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as zf:
+                for idx, fig_obj in enumerate(_download_figures, start=1):
+                    img = _plotly_fig_to_jpeg(fig_obj)
+                    img_buffer = BytesIO()
+                    img.save(img_buffer, format="JPEG", quality=92)
+                    zf.writestr(
+                        f"KPI_Chart_{idx:02d}.jpg",
+                        img_buffer.getvalue(),
+                    )
+
+            zip_buffer.seek(0)
+            st.session_state["jpeg_zip"] = zip_buffer.getvalue()
+
+    if "jpeg_zip" in st.session_state:
+        st.download_button(
+            label="⬇️ Download Individual JPEGs (ZIP)",
+            data=st.session_state["jpeg_zip"],
+            file_name="RAN_KPI_Dashboard_JPEG_Charts.zip",
+            mime="application/zip",
+            use_container_width=False,
+        )
+
