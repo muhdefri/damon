@@ -3355,8 +3355,11 @@ def render_configurable_kpi_analysis():
             key="custom_kpi_analysis_selection",
         )
 
-    if len(selected) < 2:
-        st.info("Select at least 2 KPIs to build the KPI Analysis.")
+    # KPI Analysis supports a single KPI as well as multi-KPI analysis.
+    # 1 KPI  -> immediately render one diagnostic chart.
+    # 2+ KPI -> keep the existing combined / primary+related analysis.
+    if len(selected) < 1:
+        st.info("Select at least 1 KPI to build the KPI Analysis.")
         return
 
     # Keep this analysis visually and logically independent from the
@@ -3373,14 +3376,26 @@ def render_configurable_kpi_analysis():
         )
 
     with c4:
-        chart_mode = st.selectbox(
-            "Chart Mode",
-            [
-                "2 Charts — Primary + Related",
-                "1 Combined Chart",
-            ],
-            key="custom_kpi_analysis_mode",
-        )
+        if len(selected) == 1:
+            # A single KPI does not need a second empty/related chart.
+            # Render exactly one chart for the selected KPI.
+            chart_mode = "1 KPI Chart"
+            st.selectbox(
+                "Chart Mode",
+                ["1 KPI Chart"],
+                index=0,
+                disabled=True,
+                key="custom_kpi_analysis_mode_single",
+            )
+        else:
+            chart_mode = st.selectbox(
+                "Chart Mode",
+                [
+                    "2 Charts — Primary + Related",
+                    "1 Combined Chart",
+                ],
+                key="custom_kpi_analysis_mode",
+            )
 
     with c5:
         show_threshold = st.checkbox(
@@ -4207,9 +4222,14 @@ def render_configurable_kpi_analysis():
             )
 
     else:
+        # This branch handles both:
+        #   - exactly 1 selected KPI
+        #   - the existing "1 Combined Chart" mode for 2+ KPIs
         fig_combined = make_custom_figure(
             selected,
-            f"{primary_kpi} — Combined KPI Analysis",
+            f"{primary_kpi} — Combined KPI Analysis"
+            if len(selected) > 1
+            else f"{primary_kpi} — KPI Analysis",
             include_threshold=show_threshold,
         )
 
@@ -4218,7 +4238,11 @@ def render_configurable_kpi_analysis():
         st.plotly_chart(
             fig_combined,
             use_container_width=True,
-            key="custom_kpi_analysis_combined_chart",
+            key=(
+                "custom_kpi_analysis_single_chart"
+                if len(selected) == 1
+                else "custom_kpi_analysis_combined_chart"
+            ),
         )
 
     if analysis_scope == "Site Level":
