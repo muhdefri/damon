@@ -3136,16 +3136,18 @@ def render_configurable_kpi_analysis():
     )
 
     # ------------------------------------------------------------
-    # Analysis scope + search mode
+    # Analysis scope + search mode + FreqBand + Cell Name
     # ------------------------------------------------------------
-    # KPI Analysis can now be driven by either:
+    # KPI Analysis can now be driven by:
     #   1) Site ID (SUM-....)
-    #   2) Full eNodeB Name (the original CSV value)
+    #   2) Full eNodeB Name
     #
-    # This is independent from the top Site Search control, so a user can
-    # directly investigate a full eNodeB name at Site Level or Cell Level.
-    scope_col, search_col, site_col, cell_col = st.columns(
-        [1.0, 1.25, 2.0, 2.75],
+    # FreqBand is intentionally placed BEFORE Cell Name.
+    # When one or more FreqBands are selected, the Cell Name list is
+    # dynamically reduced to only cells belonging to those bands.
+    # This avoids manually searching through all Cell Names.
+    scope_col, search_col, site_col, band_col, cell_col = st.columns(
+        [1.0, 1.15, 1.65, 1.35, 2.45],
         gap="small",
     )
 
@@ -3156,8 +3158,8 @@ def render_configurable_kpi_analysis():
             horizontal=True,
             key="custom_kpi_analysis_scope",
             help=(
-                "Site Level aggregates the selected site(s) without requiring "
-                "Cell Name selection. Cell Level enables Cell Name filtering."
+                "Site Level aggregates the selected site(s). "
+                "Cell Level enables FreqBand and Cell Name filtering."
             ),
         )
 
@@ -3243,10 +3245,24 @@ def render_configurable_kpi_analysis():
             analysis_source["_eNodeB_Search"].isin(analysis_sites)
         ].copy()
 
-    analysis_cell_values = sorted(
+    # ------------------------------------------------------------
+    # FreqBand filter
+    # ------------------------------------------------------------
+    # Build the band list AFTER Site/eNodeB filtering so only bands
+    # that actually exist under the selected site(s) are offered.
+    #
+    # IMPORTANT:
+    #   The CSV/master mapping keeps the raw band key as:
+    #       700, 850, 900, 1800, 2100, 2300F1, 2300F2
+    #   but KPI Analysis displays them as:
+    #       L700, L850, L900, L1800, L2100, L2300F1, L2300F2
+    #
+    # This makes L850/L900 etc. unambiguous to the RNO user while
+    # preserving the existing mapping/filter logic underneath.
+    raw_analysis_bands = sorted(
         value
         for value in (
-            site_filtered_source["_Cell_Display"]
+            site_filtered_source["_FreqBand"]
             .dropna()
             .astype(str)
             .str.strip()
@@ -3255,16 +3271,139 @@ def render_configurable_kpi_analysis():
         if value
     )
 
+    band_sort_order = [
+        "700",
+        "850",
+        "900",
+        "1800",
+        "2100",
+        "2300F1",
+        "2300F2",
+    ]
+
+    raw_analysis_bands = (
+        [b for b in band_sort_order if b in raw_analysis_bands]
+        + [
+            b for b in raw_analysis_bands
+            if b not in band_sort_order
+        ]
+    )
+
+    def _analysis_band_label(raw_band):
+        raw_band = str(raw_band).strip().upper()
+        return f"L{raw_band}"
+
+    def _analysis_band_raw(display_band):
+        display_band = str(display_band).strip().upper()
+        return display_band[1:] if display_band.startswith("L") else display_band
+
+    # User-facing labels: L700 / L850 / L900 / L1800 / L2100 /
+    # L2300F1 / L2300F2.
+    analysis_band_values = [
+        _analysis_band_label(b)
+        for b in raw_analysis_bands
+    ]
+
+    # Keep the previous selection when possible. Also support the
+    # previous script's raw values (e.g. "850") so a Streamlit rerun
+    # does not unexpectedly lose the user's band selection.
+    previous_bands = st.session_state.get(
+        "custom_kpi_analysis_bands",
+        analysis_band_values,
+    )
+
+    normalized_previous_bands = []
+    for band in previous_bands:
+        label = _analysis_band_label(_analysis_band_raw(band))
+        if label not in normalized_previous_bands:
+            normalized_previous_bands.append(label)
+
+    valid_default_bands = [
+        band for band in normalized_previous_bands
+        if band in analysis_band_values
+    ]
+
+    # If the selected site/eNodeB changed and no previous band remains,
+    # default to all bands available under the new site/eNodeB.
+    if not valid_default_bands and analysis_band_values:
+        valid_default_bands = analysis_band_values.copy()
+
+    with band_col:
+        analysis_bands = st.multiselect(
+            "Analysis FreqBand",
+            analysis_band_values,
+            default=valid_default_bands,
+            key="custom_kpi_analysis_bands",
+            help=(
+                "Select one or more FreqBand first "
+                "(L700/L850/L900/L1800/L2100/L2300F1/L2300F2). "
+                "The Analysis Cell Name list will then show only "
+                "cells belonging to the selected band(s)."
+            ),
+        )
+
+    # Convert the displayed labels back to the raw mapping values
+    # before filtering the dataframe.
+    analysis_bands_raw = [
+        _analysis_band_raw(band)
+        for band in analysis_bands
+    ]
+
+    # ------------------------------------------------------------
+    # Cell list filtered by selected FreqBand
+    # ------------------------------------------------------------
+    cell_source = site_filtered_source.copy()
+
+    if analysis_bands_raw:
+        cell_source = cell_source[
+            cell_source["_FreqBand"]
+            .astype(str)
+            .str.strip()
+            .isin(analysis_bands_raw)
+        ].copy()
+
+    analysis_cell_values = sorted(
+        value
+        for value in (
+            cell_source["_Cell_Display"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .unique()
+        )
+        if value
+    )
+
+    # Keep only Cell Names that are still valid after the FreqBand change.
+    previous_cells = st.session_state.get(
+        "custom_kpi_analysis_cells",
+        analysis_cell_values,
+    )
+
+    valid_default_cells = [
+        cell for cell in previous_cells
+        if cell in analysis_cell_values
+    ]
+
+    # When the user changes FreqBand and the previous Cell selection
+    # becomes invalid, default to all cells in the newly selected band.
+    if (
+        analysis_scope == "Cell Level"
+        and not valid_default_cells
+        and analysis_cell_values
+    ):
+        valid_default_cells = analysis_cell_values.copy()
+
     with cell_col:
         if analysis_scope == "Cell Level":
             analysis_cells = st.multiselect(
                 "Analysis Cell Name",
                 analysis_cell_values,
-                default=analysis_cell_values,
+                default=valid_default_cells,
                 key="custom_kpi_analysis_cells",
                 help=(
-                    "Select one or more Cell Names. Cell Names remain the "
-                    "original CSV values."
+                    "Cell Names are automatically filtered by the selected "
+                    "Analysis FreqBand."
                 ),
             )
         else:
@@ -3280,7 +3419,16 @@ def render_configurable_kpi_analysis():
 
     # Site Level = all cells belonging to the selected site(s).
     # Cell Level = only the selected Cell Names.
+    # FreqBand filtering applies to both scopes.
     analysis_df = site_filtered_source.copy()
+
+    if analysis_bands_raw:
+        analysis_df = analysis_df[
+            analysis_df["_FreqBand"]
+            .astype(str)
+            .str.strip()
+            .isin(analysis_bands_raw)
+        ].copy()
 
     if analysis_scope == "Cell Level":
         if analysis_cells:
@@ -3301,7 +3449,7 @@ def render_configurable_kpi_analysis():
         ].copy()
 
     if analysis_df.empty:
-        st.info("No data available for the selected Analysis filter / Cell Name.")
+        st.info("No data available for the selected Analysis filter / FreqBand / Cell Name.")
         return
 
     analysis_is_hourly = bool(analysis_df["_Is_Hourly"].any())
@@ -4461,6 +4609,7 @@ def render_configurable_kpi_analysis():
     else:
         scope_text = (
             f"Analysis scope: Cell Level — {len(analysis_sites)} site(s), "
+            f"{len(analysis_bands)} FreqBand(s), "
             f"{len(analysis_cells)} Cell Name(s)."
         )
 
