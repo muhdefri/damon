@@ -3998,6 +3998,200 @@ def render_configurable_kpi_analysis():
             return fig
 
         # ------------------------------------------------------------
+        # SINGLE-KPI CELL-LEVEL MODE
+        # ------------------------------------------------------------
+        # When the user selects only one KPI at Cell Level, NEVER aggregate
+        # all selected cells into one series. Each Cell Name gets its own
+        # trace and legend entry so a degraded point can immediately be
+        # traced back to the responsible cell.
+        #
+        # Site Level keeps the existing aggregated single-KPI behavior.
+        # This block is intentionally limited to KPI Analysis only.
+        # ------------------------------------------------------------
+        if (
+            len(valid_kpis) == 1
+            and analysis_scope == "Cell Level"
+            and "_Analysis_Cell" in custom_df.columns
+        ):
+            single_kpi = valid_kpis[0]
+
+            cells = [
+                c
+                for c in custom_df["_Analysis_Cell"]
+                .dropna()
+                .astype(str)
+                .unique()
+            ]
+
+            cell_colors = (
+                px.colors.qualitative.Plotly
+                + px.colors.qualitative.D3
+                + px.colors.qualitative.Safe
+                + px.colors.qualitative.Dark24
+            )
+            color_map = {
+                cell: cell_colors[i % len(cell_colors)]
+                for i, cell in enumerate(sorted(cells))
+            }
+
+            all_values = pd.to_numeric(
+                custom_df[single_kpi],
+                errors="coerce",
+            )
+
+            values_for_range = all_values.dropna()
+            if values_for_range.empty:
+                axis_range = [0, 1]
+            else:
+                vmin = float(values_for_range.min())
+                vmax = float(values_for_range.max())
+
+                if 0 <= vmin and vmax <= 105:
+                    axis_range = [0, max(100.0, vmax * 1.08)]
+                else:
+                    span = vmax - vmin
+                    pad = max(
+                        span * 0.08,
+                        abs(vmax) * 0.05,
+                        1.0,
+                    )
+                    axis_range = [
+                        vmin - pad,
+                        vmax + pad,
+                    ]
+
+            is_payload = single_kpi.upper() == "PAYLOAD"
+
+            for cell in sorted(cells):
+                cell_df = custom_df[
+                    custom_df["_Analysis_Cell"].astype(str) == str(cell)
+                ].sort_values("_Chart_Date")
+
+                cell_values = pd.to_numeric(
+                    cell_df[single_kpi],
+                    errors="coerce",
+                )
+                cell_color = color_map[cell]
+
+                if is_payload and payload_display == "Bar":
+                    fig.add_trace(
+                        go.Bar(
+                            x=cell_df["_Chart_Date"],
+                            y=cell_values,
+                            name=f"{cell} — {single_kpi}",
+                            legendgroup=cell,
+                            marker_color=cell_color,
+                            marker_line_width=0,
+                            opacity=0.38,
+                            yaxis="y",
+                        )
+                    )
+                else:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=cell_df["_Chart_Date"],
+                            y=cell_values,
+                            name=f"{cell} — {single_kpi}",
+                            legendgroup=cell,
+                            mode="lines+markers",
+                            line=dict(
+                                color=cell_color,
+                                width=7 if single_kpi == primary_kpi else 5,
+                            ),
+                            marker=dict(
+                                size=7 if single_kpi == primary_kpi else 6,
+                                color=cell_color,
+                            ),
+                            connectgaps=True,
+                            yaxis="y",
+                        )
+                    )
+
+            if include_threshold:
+                fig.add_hline(
+                    y=float(threshold),
+                    line=dict(
+                        color="red",
+                        width=2,
+                        dash="dash",
+                    ),
+                    annotation_text=(
+                        f"{primary_kpi} Threshold "
+                        f"{threshold:g}"
+                        + (
+                            "%"
+                            if primary_kpi.upper() != "PAYLOAD"
+                            else ""
+                        )
+                    ),
+                    annotation_position="top left",
+                    yref="y",
+                )
+
+            custom_x_pad = _bar_xaxis_padding(
+                custom_df["_Chart_Date"]
+            )
+            custom_x_range = [
+                custom_df["_Chart_Date"].min() - custom_x_pad,
+                custom_df["_Chart_Date"].max() + custom_x_pad,
+            ]
+
+            def _single_axis_title(kpi):
+                if kpi.upper() == "PAYLOAD":
+                    return "Payload (GB)"
+                if (
+                    "AVAILABILITY" in kpi.upper()
+                    or "%" in kpi.upper()
+                    or "RATE" in kpi.upper()
+                    or "SSSR" in kpi.upper()
+                ):
+                    return f"{kpi} (%)"
+                return kpi
+
+            fig.update_layout(
+                title=title,
+                height=max(430, 430 + (len(cells) // 3) * 24),
+                template="plotly_white",
+                margin=dict(
+                    l=58,
+                    r=58,
+                    t=55,
+                    b=150,
+                ),
+                hovermode="x unified",
+                barmode="overlay",
+                xaxis=dict(
+                    title="Date / Time",
+                    tickformat=tickformat,
+                    hoverformat=hoverformat,
+                    dtick=dtick,
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                    range=custom_x_range,
+                    autorange=False,
+                ),
+                yaxis=dict(
+                    title=_single_axis_title(single_kpi),
+                    range=axis_range,
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                    side="left",
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.22,
+                    xanchor="center",
+                    x=0.5,
+                    traceorder="normal",
+                ),
+            )
+
+            return fig
+
+        # ------------------------------------------------------------
         # FALLBACK FOR 1 OR 3+ KPIs
         # ------------------------------------------------------------
         # Keep the existing behavior for combinations other than exactly
