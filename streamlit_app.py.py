@@ -1941,7 +1941,10 @@ if "Payload" in selected_kpis or "Total Payload Sector" in selected_kpis:
             "700": "L700",
         }
 
-        band_payload_source = site_df[
+        # Use the complete site-level dataset for Band Level so the
+        # summary can show every band present at the selected site,
+        # even when the Sector/FreqBand chart filters are narrowed.
+        band_payload_source = site_level_df[
             [
                 "_Date",
                 "_Date_Day",
@@ -1969,6 +1972,17 @@ if "Payload" in selected_kpis or "Total Payload Sector" in selected_kpis:
             .str.strip()
             .str.upper()
             .str.replace("L", "", regex=False)
+        )
+
+        # 2300 is represented in the master mapping as 2300F1 / 2300F2.
+        # For Band Level Payload they are intentionally combined into one
+        # logical band: L2300.
+        band_payload_source["_Band_Key"] = (
+            band_payload_source["_Band_Key"]
+            .replace({
+                "2300F1": "2300",
+                "2300F2": "2300",
+            })
         )
 
         band_payload_source = band_payload_source.dropna(
