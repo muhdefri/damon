@@ -3105,6 +3105,18 @@ for kpi_name in main_chart_kpis:
 # ============================================================
 
 def render_kpi_analysis():
+    # Exact Bulk Cell + Site + FreqBand input always means CELL-LEVEL
+    # chart traces. The UI Analysis Scope may still be left at Site Level,
+    # but that must never collapse the requested cells into one Site line.
+    #
+    # This is intentionally separate from the normal Site Level workflow.
+    # KPI Analysis is an RNO diagnostic view: each requested Cell Name
+    # must remain independently traceable in the trend chart and summary.
+    force_bulk_cell_level = bool(analysis_cell_site_pairs)
+    effective_cell_level = (
+        analysis_scope == "Cell Level"
+        or force_bulk_cell_level
+    )
     if site_level_df.empty:
         return
 
@@ -4179,7 +4191,7 @@ def render_configurable_kpi_analysis():
         valid_default_cells = analysis_cell_values.copy()
 
     with cell_col:
-        if analysis_scope == "Cell Level":
+        if effective_cell_level:
             analysis_cells = st.multiselect(
                 "Analysis Cell Name",
                 analysis_cell_values,
@@ -4218,7 +4230,7 @@ def render_configurable_kpi_analysis():
             .isin(analysis_bands_raw)
         ].copy()
 
-    if analysis_scope == "Cell Level":
+    if effective_cell_level:
         if analysis_cells:
             analysis_df = analysis_df[
                 analysis_df["_Cell_Display"].isin(analysis_cells)
@@ -4327,6 +4339,11 @@ def render_configurable_kpi_analysis():
     # Keep this analysis visually and logically independent from the
     # fixed two-chart Site Diagnostic Overview above.
     st.markdown("#### 🔎 KPI Analysis — Custom Combination")
+    if force_bulk_cell_level:
+        st.caption(
+            "🎯 Bulk Exact Target Mode: each input Cell Name is plotted "
+            "as an independent trend trace (Cell + Site/eNodeB + FreqBand)."
+        )
 
     c3, c4, c5, c6 = st.columns([1, 1, 1, 1], gap="small")
 
@@ -4644,7 +4661,7 @@ def render_configurable_kpi_analysis():
     # Do NOT collapse all selected cells into one row per date.
     # Keep Cell Name in the grouping key so every cell gets its own
     # trace/color in the KPI Analysis chart.
-    if analysis_scope == "Cell Level":
+    if effective_cell_level:
         work["_Analysis_Cell"] = (
             analysis_df["_Cell_Display"]
             .apply(normalize_cell_name)
@@ -5174,12 +5191,14 @@ def render_configurable_kpi_analysis():
         # trace and legend entry so a degraded point can immediately be
         # traced back to the responsible cell.
         #
-        # Site Level keeps the existing aggregated single-KPI behavior.
-        # This block is intentionally limited to KPI Analysis only.
+        # Site Level keeps the existing aggregated single-KPI behavior
+        # only when there is NO exact Bulk target list. In Bulk mode,
+        # effective_cell_level is True and every requested Cell Name gets
+        # its own trace/legend entry.
         # ------------------------------------------------------------
         if (
             len(valid_kpis) == 1
-            and analysis_scope == "Cell Level"
+            and effective_cell_level
             and "_Analysis_Cell" in custom_df.columns
         ):
             single_kpi = valid_kpis[0]
@@ -5705,7 +5724,7 @@ def render_configurable_kpi_analysis():
                 "_Sector_Display",
                 "_FreqBand",
             ])
-        elif analysis_scope == "Cell Level":
+        elif effective_cell_level:
             identity_cols.extend([
                 "_Cell_Display",
                 localcell_col,
