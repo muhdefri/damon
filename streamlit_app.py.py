@@ -3105,23 +3105,6 @@ for kpi_name in main_chart_kpis:
 # ============================================================
 
 def render_kpi_analysis():
-    # Exact Bulk Cell + Site + FreqBand input always means CELL-LEVEL
-    # chart traces. The UI Analysis Scope may still be left at Site Level,
-    # but that must never collapse the requested cells into one Site line.
-    #
-    # This is intentionally separate from the normal Site Level workflow.
-    # KPI Analysis is an RNO diagnostic view: each requested Cell Name
-    # must remain independently traceable in the trend chart and summary.
-    # IMPORTANT:
-    # Use global_bulk_pairs here. It is parsed before this renderer is
-    # called and therefore always exists. analysis_cell_site_pairs is
-    # created later inside this function, so referencing it here caused
-    # the NameError shown by Streamlit.
-    force_bulk_cell_level = bool(global_bulk_pairs)
-    effective_cell_level = (
-        analysis_scope == "Cell Level"
-        or force_bulk_cell_level
-    )
     if site_level_df.empty:
         return
 
