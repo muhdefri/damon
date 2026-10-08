@@ -3357,43 +3357,46 @@ def render_configurable_kpi_analysis():
         )
 
     # ------------------------------------------------------------
-    # BULK CELL + SITE LIST
+    # BULK CELL + SITE + FREQBAND LIST
     # ------------------------------------------------------------
-    # Recommended Excel input:
+    # Recommended input from Excel:
     #
-    # Cell Name                         Site ID
-    # JB4G85_426D591E85_133            SUM-JA-MBN-0121
-    # JB4G85_4264512E85_131            SUM-JA-MBN-0125
+    #   850    JB4G85_4264237E85_131    SUM-JA-MBN-0779
     #
-    # The Cell + Site pair is preserved. This is important for
-    # Cell Level analysis: selecting a Site must NOT automatically
-    # include every other Cell under that Site.
+    # The column order is NOT important. The parser identifies each
+    # value by its content:
+    #   - 850 / L850                  -> FreqBand
+    #   - JB4G85_...                  -> Cell Name
+    #   - SUM-JA-MBN-0779             -> Site ID
+    #   - 4264587E_LTE_...#...#MC     -> full eNodeB Name
     #
-    # The second column may also be a full eNodeB Name when no
-    # SUM- Site ID exists, for example:
+    # One Excel row = one exact analysis target:
+    #       Cell Name + Site/eNodeB + FreqBand
     #
-    # JB4G85_426D591E85_133    4264587E_LTE_H2_MERSAM_JAMBI#4264587E#MC
+    # This prevents the analysis from expanding to other bands/cells
+    # that were not included in the user's list.
     # ------------------------------------------------------------
     analysis_sites_bulk = []
     analysis_cell_site_pairs = []
+    analysis_bulk_bands = []
 
     if analysis_search_mode == "Site ID":
         with st.expander(
-            "📋 Bulk Cell + Site List — Paste from Excel",
+            "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
             expanded=False,
         ):
             bulk_cell_site_text = st.text_area(
-                "Paste Cell Name + Site ID / eNodeB Name",
+                "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
                 placeholder=(
-                    "JB4G85_426D591E85_133\\tSUM-JA-MBN-0121\\n"
-                    "JB4G85_4264512E85_131\\tSUM-JA-MBN-0125\\n"
-                    "JB4G85_4261509E85_133\\tSUM-JA-MBN-0127"
+                    "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
+                    "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
+                    "JB4G85_4264237E85_133\\t850\\tSUM-JA-MBN-0779"
                 ),
                 height=150,
                 key="custom_kpi_analysis_bulk_cell_site_list",
                 help=(
-                    "Copy two columns directly from Excel: "
-                    "Cell Name + Site ID/eNodeB Name."
+                    "Paste 3 columns from Excel in ANY order: "
+                    "Cell Name, Site ID/eNodeB Name, and FreqBand."
                 ),
             )
 
@@ -3424,6 +3427,26 @@ def render_configurable_kpi_analysis():
                 .unique()
             )
 
+            available_raw_bands = set(
+                analysis_source["_FreqBand"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
+
+            def _normalize_bulk_band(value):
+                value = str(value).strip().upper()
+                if value.startswith("L"):
+                    value = value[1:]
+                return value
+
+            available_band_normalized = {
+                _normalize_bulk_band(band)
+                for band in available_raw_bands
+            }
+
             if bulk_cell_site_text.strip():
 
                 for raw_line in bulk_cell_site_text.splitlines():
@@ -3433,7 +3456,6 @@ def render_configurable_kpi_analysis():
                     if not line:
                         continue
 
-                    # Skip common Excel headers.
                     normalized_line = line.lower()
                     if (
                         "cell name" in normalized_line
@@ -3445,8 +3467,8 @@ def render_configurable_kpi_analysis():
                     ):
                         continue
 
-                    # Excel copy uses TAB between columns.
-                    # Also support |, ;, and comma for convenience.
+                    # Excel copy normally uses TAB. Also support
+                    # pipe, semicolon, comma and multiple spaces.
                     fields = [
                         field.strip()
                         for field in re.split(
@@ -3456,7 +3478,7 @@ def render_configurable_kpi_analysis():
                         if field.strip()
                     ]
 
-                    if len(fields) < 2:
+                    if len(fields) < 3:
                         fields = [
                             field.strip()
                             for field in re.split(
@@ -3466,7 +3488,7 @@ def render_configurable_kpi_analysis():
                             if field.strip()
                         ]
 
-                    if len(fields) < 2:
+                    if len(fields) < 3:
                         fields = [
                             field.strip()
                             for field in re.split(
@@ -3476,21 +3498,21 @@ def render_configurable_kpi_analysis():
                             if field.strip()
                         ]
 
-                    if len(fields) < 2:
+                    if len(fields) < 3:
                         continue
 
                     cell_value = None
                     site_value = None
+                    band_value = None
 
-                    # Find the exact Cell Name in the uploaded KPI data.
+                    # Identify Cell Name by exact match.
                     for field in fields:
                         field_upper = field.upper().strip()
-
                         if field_upper in available_cells:
                             cell_value = field_upper
                             break
 
-                    # Find Site ID or full eNodeB Name.
+                    # Identify Site ID or full eNodeB Name.
                     for field in fields:
                         field_upper = field.upper().strip()
 
@@ -3511,102 +3533,120 @@ def render_configurable_kpi_analysis():
                             site_value = field_upper
                             break
 
-                    if cell_value and site_value:
+                    # Identify FreqBand by exact normalized band.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+                        normalized_band = _normalize_bulk_band(field_upper)
+
+                        if (
+                            normalized_band in
+                            available_band_normalized
+                        ):
+                            band_value = normalized_band
+                            break
+
+                    if (
+                        cell_value
+                        and site_value
+                        and band_value
+                    ):
                         analysis_cell_site_pairs.append(
-                            (cell_value, site_value)
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
+                            )
                         )
 
-                # Remove duplicate pairs while preserving Excel order.
+                # Preserve Excel order and remove duplicate rows.
                 analysis_cell_site_pairs = list(
                     dict.fromkeys(
                         analysis_cell_site_pairs
                     )
                 )
 
-                # Only keep valid pairs that actually exist in the KPI data.
                 valid_pairs = []
                 invalid_pairs = []
 
-                for cell_value, site_value in analysis_cell_site_pairs:
-
-                    cell_exists = (
-                        cell_value in available_cells
-                    )
+                for (
+                    cell_value,
+                    site_value,
+                    band_value,
+                ) in analysis_cell_site_pairs:
 
                     if site_value.startswith("SUM-"):
-                        site_exists = (
-                            site_value in available_sites
+                        pair_mask = (
+                            analysis_source["_Cell_Display"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(cell_value)
+                            & analysis_source["_Site_ID_Search"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(site_value)
+                            & analysis_source["_FreqBand"]
+                            .astype(str)
+                            .str.upper()
+                            .map(_normalize_bulk_band)
+                            .eq(band_value)
                         )
                     else:
-                        site_exists = (
-                            site_value in available_enodebs
+                        pair_mask = (
+                            analysis_source["_Cell_Display"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(cell_value)
+                            & analysis_source["_eNodeB_Search"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(site_value)
+                            & analysis_source["_FreqBand"]
+                            .astype(str)
+                            .str.upper()
+                            .map(_normalize_bulk_band)
+                            .eq(band_value)
                         )
 
-                    # For a Cell + Site pair, check the actual
-                    # combination, not only whether each value exists.
-                    if cell_exists and site_exists:
-
-                        if site_value.startswith("SUM-"):
-                            pair_exists = (
-                                (
-                                    analysis_source["_Cell_Display"]
-                                    .astype(str)
-                                    .str.upper()
-                                    .eq(cell_value)
-                                )
-                                & (
-                                    analysis_source["_Site_ID_Search"]
-                                    .astype(str)
-                                    .str.upper()
-                                    .eq(site_value)
-                                )
-                            ).any()
-                        else:
-                            pair_exists = (
-                                (
-                                    analysis_source["_Cell_Display"]
-                                    .astype(str)
-                                    .str.upper()
-                                    .eq(cell_value)
-                                )
-                                & (
-                                    analysis_source["_eNodeB_Search"]
-                                    .astype(str)
-                                    .str.upper()
-                                    .eq(site_value)
-                                )
-                            ).any()
-
-                        if pair_exists:
-                            valid_pairs.append(
-                                (cell_value, site_value)
+                    if pair_mask.any():
+                        valid_pairs.append(
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
                             )
-                        else:
-                            invalid_pairs.append(
-                                (cell_value, site_value)
-                            )
+                        )
                     else:
                         invalid_pairs.append(
-                            (cell_value, site_value)
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
+                            )
                         )
 
                 analysis_cell_site_pairs = valid_pairs
 
-                # Site values are also retained for the existing
-                # Site/FreqBand filter flow.
                 analysis_sites_bulk = list(
                     dict.fromkeys(
                         site_value
-                        for _, site_value
+                        for _, site_value, _
+                        in analysis_cell_site_pairs
+                    )
+                )
+
+                analysis_bulk_bands = list(
+                    dict.fromkeys(
+                        band_value
+                        for _, _, band_value
                         in analysis_cell_site_pairs
                     )
                 )
 
                 st.caption(
-                    f"Bulk pair list: "
-                    f"{len(analysis_cell_site_pairs):,} valid Cell/Site pair(s)"
+                    f"Bulk list: "
+                    f"{len(analysis_cell_site_pairs):,} valid target(s)"
                     + (
-                        f" | {len(invalid_pairs):,} invalid pair(s)."
+                        f" | {len(invalid_pairs):,} not found."
                         if invalid_pairs
                         else "."
                     )
@@ -3614,7 +3654,7 @@ def render_configurable_kpi_analysis():
 
                 if invalid_pairs:
                     with st.expander(
-                        f"View {len(invalid_pairs):,} invalid pair(s)",
+                        f"View {len(invalid_pairs):,} target(s) not found",
                         expanded=False,
                     ):
                         st.dataframe(
@@ -3623,6 +3663,7 @@ def render_configurable_kpi_analysis():
                                 columns=[
                                     "Cell Name",
                                     "Site / eNodeB",
+                                    "FreqBand",
                                 ],
                             ),
                             use_container_width=True,
@@ -3647,7 +3688,6 @@ def render_configurable_kpi_analysis():
 
     if analysis_search_mode == "Site ID":
 
-        # Site-level filter first.
         sum_bulk_sites = [
             value
             for value in analysis_sites
@@ -3678,14 +3718,7 @@ def render_configurable_kpi_analysis():
             site_mask
         ].copy()
 
-        # --------------------------------------------------------
-        # Cell + Site pair filter.
-        #
-        # Example:
-        #   JB4G85_426D591E85_133 + SUM-JA-MBN-0121
-        #
-        # Only this exact combination is retained.
-        # --------------------------------------------------------
+        # Exact Cell + Site + FreqBand filter.
         if (
             analysis_scope == "Cell Level"
             and analysis_cell_site_pairs
@@ -3695,7 +3728,11 @@ def render_configurable_kpi_analysis():
                 index=site_filtered_source.index,
             )
 
-            for cell_value, site_value in analysis_cell_site_pairs:
+            for (
+                cell_value,
+                site_value,
+                band_value,
+            ) in analysis_cell_site_pairs:
 
                 cell_mask = (
                     site_filtered_source["_Cell_Display"]
@@ -3719,11 +3756,20 @@ def render_configurable_kpi_analysis():
                         .eq(site_value)
                     )
 
+                band_mask = (
+                    site_filtered_source["_FreqBand"]
+                    .astype(str)
+                    .str.upper()
+                    .map(_normalize_bulk_band)
+                    .eq(band_value)
+                )
+
                 pair_mask = (
                     pair_mask
                     | (
                         cell_mask
                         & site_mask_pair
+                        & band_mask
                     )
                 )
 
@@ -3885,7 +3931,7 @@ def render_configurable_kpi_analysis():
     ):
         bulk_pair_cells = [
             cell
-            for cell, _ in analysis_cell_site_pairs
+            for cell, _, _ in analysis_cell_site_pairs
             if cell in analysis_cell_values
         ]
 
