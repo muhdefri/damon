@@ -3681,6 +3681,7 @@ def render_kpi_status_transition():
     transition_filter = st.selectbox(
         "Show Transition",
         [
+            "Not Meet Only",
             "Not Meet → Meet",
             "All",
             "Meet → Meet",
@@ -3690,9 +3691,18 @@ def render_kpi_status_transition():
         ],
         index=0,
         key="kpi_status_transition_filter",
+        help=(
+            "Action-oriented view: show every Cell + KPI that is "
+            "Not Meet on Date B (After date). This includes both "
+            "Not Meet → Not Meet and Meet → Not Meet."
+        ),
     )
 
-    if transition_filter == "No Data":
+    if transition_filter == "Not Meet Only":
+        display_df = transition_result[
+            transition_result["Status B"].eq("Not Meet")
+        ].copy()
+    elif transition_filter == "No Data":
         display_df = transition_result[
             transition_result["Transition"].str.contains(
                 "No Data",
@@ -3745,34 +3755,65 @@ def render_kpi_status_transition():
     c4.metric("Remain Not Meet", remain_not_meet_count)
 
     # ------------------------------------------------------------
-    # KPI-level improvement summary
+    # KPI-level summary
     # ------------------------------------------------------------
-    improved_only = transition_result[
-        transition_result["Transition"] == "Not Meet → Meet"
-    ].copy()
-
-    if not improved_only.empty:
-        kpi_summary = (
-            improved_only
+    if transition_filter == "Not Meet Only":
+        action_summary = (
+            display_df
             .groupby("KPI")
             .size()
-            .reset_index(name="Cells Improved to Meet")
+            .reset_index(name="Not Meet Cells — Action Required")
             .sort_values(
-                "Cells Improved to Meet",
+                "Not Meet Cells — Action Required",
                 ascending=False,
             )
         )
 
-        st.markdown("#### 📈 KPI Improvement Summary")
+        st.markdown("#### 🎯 KPI Action Summary")
+        st.caption(
+            "Only KPI results that are **Not Meet on Date B** are shown. "
+            "These are the KPI/Cell combinations to prioritize for "
+            "optimization and action."
+        )
         st.dataframe(
-            kpi_summary,
+            action_summary,
             use_container_width=True,
             hide_index=True,
         )
+    else:
+        improved_only = transition_result[
+            transition_result["Transition"] == "Not Meet → Meet"
+        ].copy()
+
+        if not improved_only.empty:
+            kpi_summary = (
+                improved_only
+                .groupby("KPI")
+                .size()
+                .reset_index(name="Cells Improved to Meet")
+                .sort_values(
+                    "Cells Improved to Meet",
+                    ascending=False,
+                )
+            )
+
+            st.markdown("#### 📈 KPI Improvement Summary")
+            st.dataframe(
+                kpi_summary,
+                use_container_width=True,
+                hide_index=True,
+            )
 
     # ------------------------------------------------------------
     # Detailed result
     # ------------------------------------------------------------
+    if transition_filter == "Not Meet Only":
+        st.info(
+            "🎯 **Action List:** only KPI results that are **Not Meet on "
+            "Date B** are included. These are the Cell/KPI combinations "
+            "to prioritize for optimization."
+        )
+
     st.markdown(
         f"#### 🔎 Detail — {transition_filter}"
     )
