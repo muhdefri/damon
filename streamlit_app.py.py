@@ -3739,29 +3739,27 @@ def render_kpi_status_transition():
         )
 
         if selected_target_labels:
-            selected_target_set = set(selected_target_labels)
-
-            transition_result["_Target Label"] = (
-                transition_result["_FreqBand"].astype(str)
-                + " | "
-                + transition_result["_Cell_Display"].astype(str)
-                + " | "
-                + transition_result["_Site_ID_Search"].astype(str)
-            )
-
-            transition_result = transition_result[
-                transition_result["_Target Label"].isin(selected_target_set)
-            ].copy()
-
+            # IMPORTANT:
+            # Do NOT filter transition_result here.
+            #
+            # transition_result is the authoritative result for the
+            # complete pasted Problematic Cell Target List. Therefore:
+            #   - KPI Action Summary = ALL pasted targets
+            #   - Detail / Show Transition = ALL pasted targets
+            #   - Select Problem Cell / Site = correlation/investigation only
+            #
+            # The selected targets are applied later through
+            # correlation_scope only.
             st.caption(
-                f"🎯 Focused analysis: **{len(selected_target_labels)}** "
-                "selected target(s). Summary, detail and charts are now "
-                "restricted to these targets."
+                f"🎯 Focused correlation: **{len(selected_target_labels)}** "
+                "selected target(s). The KPI Action Summary and Detail table "
+                "continue to use the complete pasted target list."
             )
         else:
             st.caption(
-                "All pasted targets are included. Select one or more "
-                "Cell + Site + FreqBand targets to focus the analysis."
+                "All pasted targets are included in KPI Action Summary and "
+                "Detail. Select one or more Cell + Site + FreqBand targets "
+                "only when you want to focus the correlation chart."
             )
 
     # ------------------------------------------------------------
@@ -4051,13 +4049,39 @@ def render_kpi_status_transition():
     # Chart 2: Correlation scope
     # -------------------------
     # This is the ONLY chart affected by Select Problem Cell / Site.
-    correlation_scope = transition_result[
-        [
-            "_Cell_Display",
-            "_Site_ID_Search",
-            "_FreqBand",
-        ]
-    ].drop_duplicates().copy()
+    if selected_target_labels:
+        # Select Problem Cell / Site controls ONLY the correlation chart.
+        # Build the scope from the complete pasted target list so that
+        # selecting a cell never changes the KPI Action Summary/Detail.
+        selector_scope_source = trend_source_result.copy()
+
+        selector_scope_source["_Target Label"] = (
+            selector_scope_source["_FreqBand"].astype(str)
+            + " | "
+            + selector_scope_source["_Cell_Display"].astype(str)
+            + " | "
+            + selector_scope_source["_Site_ID_Search"].astype(str)
+        )
+
+        correlation_scope = selector_scope_source[
+            selector_scope_source["_Target Label"].isin(
+                set(selected_target_labels)
+            )
+        ][
+            [
+                "_Cell_Display",
+                "_Site_ID_Search",
+                "_FreqBand",
+            ]
+        ].drop_duplicates().copy()
+    else:
+        correlation_scope = pd.DataFrame(
+            columns=[
+                "_Cell_Display",
+                "_Site_ID_Search",
+                "_FreqBand",
+            ]
+        )
 
     # IMPORTANT:
     # The combo chart must use the KPIs selected in "KPIs to Compare",
@@ -4389,6 +4413,73 @@ def render_kpi_status_transition():
                                     )
                                 )
 
+                # --------------------------------------------------------
+                # KPI threshold / target lines
+                # --------------------------------------------------------
+                # Use the SAME target and direction entered in
+                # "KPI Target / Direction" above.  The target is drawn on
+                # the matching Y-axis so the correlation chart can be read
+                # directly against the KPI threshold.
+                primary_target_row = target_df[
+                    target_df["KPI"].eq(primary_kpi)
+                ]
+
+                if not primary_target_row.empty:
+                    primary_target = float(
+                        primary_target_row["Target"].iloc[0]
+                    )
+
+                    fig_corr.add_trace(
+                        go.Scatter(
+                            x=[
+                                primary_history["_Date"].min(),
+                                primary_history["_Date"].max(),
+                            ],
+                            y=[primary_target, primary_target],
+                            mode="lines",
+                            name=f"Target | {primary_kpi} ({primary_target:g})",
+                            line=dict(
+                                color="#4472C4",
+                                dash="dot",
+                                width=2,
+                            ),
+                            yaxis="y",
+                            legendgroup="targets",
+                        )
+                    )
+
+                if counter_kpi != "None" and not counter_history.empty:
+                    counter_target_row = target_df[
+                        target_df["KPI"].eq(counter_kpi)
+                    ]
+
+                    if not counter_target_row.empty:
+                        counter_target = float(
+                            counter_target_row["Target"].iloc[0]
+                        )
+
+                        fig_corr.add_trace(
+                            go.Scatter(
+                                x=[
+                                    counter_history["_Date"].min(),
+                                    counter_history["_Date"].max(),
+                                ],
+                                y=[counter_target, counter_target],
+                                mode="lines",
+                                name=(
+                                    f"Target | {counter_kpi} "
+                                    f"({counter_target:g})"
+                                ),
+                                line=dict(
+                                    color="#ED7D31",
+                                    dash="dot",
+                                    width=2,
+                                ),
+                                yaxis="y2",
+                                legendgroup="targets",
+                            )
+                        )
+
                 fig_corr.update_layout(
                     title=(
                         f"{primary_kpi}"
@@ -4464,15 +4555,18 @@ def render_kpi_status_transition():
                 )
 
                 if counter_kpi == "None":
+                    primary_target_text = "Target line follows KPI Target / Direction."
                     st.caption(
                         f"Blue solid = {primary_kpi} | "
                         "Counter KPI = None | "
-                        "Cell Name shown in legend"
+                        f"{primary_target_text}"
                     )
                 else:
                     st.caption(
                         f"Blue solid = {primary_kpi} | "
                         f"Orange dashed = {counter_kpi} | "
+                        f"Blue dotted = {primary_kpi} target | "
+                        f"Orange dotted = {counter_kpi} target | "
                         f"Left axis = {primary_kpi} | "
                         f"Right axis = {counter_kpi}"
                     )
