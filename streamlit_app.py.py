@@ -3603,11 +3603,11 @@ def render_configurable_kpi_analysis():
     analysis_bulk_bands = []
 
     with st.expander(
-        "🎯 KPI ANALYSIS — BULK CELL + SITE + FREQBAND INPUT",
+        "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
         expanded=True,
     ):
         bulk_cell_site_text = st.text_area(
-            "PASTE YOUR 3-COLUMN EXCEL LIST HERE",
+            "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
             placeholder=(
                 "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
                 "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
@@ -3894,7 +3894,7 @@ def render_configurable_kpi_analysis():
     # ------------------------------------------------------------
     # Combine manual Site selection + bulk Site values.
     # ------------------------------------------------------------
-    if analysis_search_mode == "Site ID" or analysis_cell_site_pairs:
+    if analysis_search_mode == "Site ID":
         analysis_sites = list(
             dict.fromkeys(
                 analysis_sites_manual
@@ -3907,7 +3907,7 @@ def render_configurable_kpi_analysis():
     else:
         analysis_sites = analysis_sites_manual
 
-    if analysis_search_mode == "Site ID" or analysis_cell_site_pairs:
+    if analysis_search_mode == "Site ID":
 
         sum_bulk_sites = [
             value
@@ -4513,78 +4513,73 @@ def render_configurable_kpi_analysis():
     compare_date_a = None
     compare_date_b = None
 
-    # ------------------------------------------------------------
-    # AVERAGE DATE RANGE — EXPLICIT START / END DATE
-    # ------------------------------------------------------------
+    # ============================================================
+    # AVERAGE DATE RANGE
+    # ============================================================
     if date_evaluation_mode == "Average Date Range":
-        if len(available_analysis_dates) < 1:
+        if not available_analysis_dates:
             st.warning(
                 "Average Date Range requires at least one available date "
                 "in the current KPI Analysis filter."
             )
+            average_start_date = None
+            average_end_date = None
         else:
             avg_start_col, avg_end_col = st.columns(
                 2,
                 gap="small",
             )
 
-            avg_date_options = [
-                pd.Timestamp(value).date()
-                for value in available_analysis_dates
-            ]
-
-            saved_avg_start = st.session_state.get(
-                "custom_kpi_analysis_avg_start_date"
-            )
-            saved_avg_end = st.session_state.get(
-                "custom_kpi_analysis_avg_end_date"
-            )
-
-            if saved_avg_start not in avg_date_options:
-                saved_avg_start = avg_date_options[0]
-
-            if saved_avg_end not in avg_date_options:
-                saved_avg_end = avg_date_options[-1]
-
-            def _avg_date_label(value):
+            def _average_date_label(value):
                 return pd.Timestamp(value).strftime("%d-%b-%Y")
 
+            saved_avg_start = st.session_state.get(
+                "custom_kpi_analysis_average_start"
+            )
+            saved_avg_end = st.session_state.get(
+                "custom_kpi_analysis_average_end"
+            )
+
+            if saved_avg_start not in available_analysis_dates:
+                saved_avg_start = available_analysis_dates[0]
+
+            if saved_avg_end not in available_analysis_dates:
+                saved_avg_end = available_analysis_dates[-1]
+
             with avg_start_col:
-                avg_start_date = st.selectbox(
+                average_start_date = st.selectbox(
                     "Start Date",
-                    options=avg_date_options,
-                    index=avg_date_options.index(saved_avg_start),
-                    format_func=_avg_date_label,
-                    key="custom_kpi_analysis_avg_start_date",
-                    help="First date included in the Average Date Range.",
+                    options=available_analysis_dates,
+                    index=available_analysis_dates.index(saved_avg_start),
+                    format_func=_average_date_label,
+                    key="custom_kpi_analysis_average_start",
                 )
 
             with avg_end_col:
-                avg_end_date = st.selectbox(
+                average_end_date = st.selectbox(
                     "End Date",
-                    options=avg_date_options,
-                    index=avg_date_options.index(saved_avg_end),
-                    format_func=_avg_date_label,
-                    key="custom_kpi_analysis_avg_end_date",
-                    help="Last date included in the Average Date Range.",
+                    options=available_analysis_dates,
+                    index=available_analysis_dates.index(saved_avg_end),
+                    format_func=_average_date_label,
+                    key="custom_kpi_analysis_average_end",
                 )
 
-            avg_start_date, avg_end_date = sorted(
-                [avg_start_date, avg_end_date]
-            )
+            if average_start_date > average_end_date:
+                average_start_date, average_end_date = (
+                    average_end_date,
+                    average_start_date,
+                )
 
-            avg_day_count = (
-                pd.Timestamp(avg_end_date)
-                - pd.Timestamp(avg_start_date)
+            average_day_count = (
+                pd.Timestamp(average_end_date)
+                - pd.Timestamp(average_start_date)
             ).days + 1
 
             st.caption(
-                f"📅 Average Date Range: "
-                f"**{pd.Timestamp(avg_start_date):%d-%b-%Y} → "
-                f"{pd.Timestamp(avg_end_date):%d-%b-%Y}** "
-                f"({avg_day_count} day(s)). "
-                "Each Cell Name produces one aggregated KPI result "
-                "for this selected period."
+                f"Selected Average Date Range: "
+                f"**{pd.Timestamp(average_start_date):%d-%b-%Y} → "
+                f"{pd.Timestamp(average_end_date):%d-%b-%Y}** "
+                f"({average_day_count} day(s))"
             )
 
     if date_evaluation_mode == "Compare 2 Dates":
@@ -6133,19 +6128,19 @@ def render_configurable_kpi_analysis():
         # MODE 2 — AVERAGE DATE RANGE
         # --------------------------------------------------------
         elif date_evaluation_mode == "Average Date Range":
-            avg_range_source = valid_summary_source[
+            average_source = valid_summary_source[
                 (
                     valid_summary_source["_Summary_Date"]
-                    >= pd.Timestamp(avg_start_date)
+                    >= pd.Timestamp(average_start_date)
                 )
                 & (
                     valid_summary_source["_Summary_Date"]
-                    <= pd.Timestamp(avg_end_date)
+                    <= pd.Timestamp(average_end_date)
                 )
             ].copy()
 
             average_summary = (
-                avg_range_source
+                average_source
                 .groupby(
                     identity_cols,
                     as_index=False,
@@ -6271,9 +6266,3 @@ if _download_figures:
             use_container_width=False,
         )
 
-
-# ============================================================
-# ACTIVATE KPI ANALYSIS
-# ============================================================
-if chart_layout == "KPI Analysis":
-    render_kpi_analysis()
