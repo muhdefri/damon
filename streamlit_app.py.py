@@ -3988,16 +3988,24 @@ def render_kpi_status_transition():
     #   selected cell = Remain Meet
     #   => blank chart
     #
-    # The summary/detail still obey Show Transition. The chart uses the
-    # exact selected target(s) as its scope.
-    if selected_target_labels:
-        st.markdown("#### 📈 Selected Cell KPI Trend — Cell Name")
-        st.caption(
-            "Trend scope follows the selected Problem Cell / Site target(s). "
-            "The KPI list follows **KPIs to Compare**, so a KPI can still be "
-            "selected for comparison even when it is currently Meet."
-        )
+    # The summary/detail still obey Show Transition.
+    #
+    # IMPORTANT DESIGN:
+    #   Chart 1 / Trend = ALWAYS available when there is a valid site/target
+    #                     scope. It does NOT depend on "Select Problem Cell".
+    #   Chart 2 / Correlation = ONLY appears when the user explicitly selects
+    #                           Problem Cell / Site target(s).
+    #
+    # This means the selector is an investigation filter for the combo chart,
+    # not a prerequisite for the normal KPI trend chart.
+    st.markdown("#### 📈 Selected Cell KPI Trend — Cell Name")
+    st.caption(
+        "Trend chart is available without selecting Problem Cell / Site. "
+        "When Problem Cell / Site targets are selected, the trend follows "
+        "those exact targets."
+    )
 
+    if selected_target_labels:
         selected_scope = transition_result[
             [
                 "_Cell_Display",
@@ -4005,6 +4013,39 @@ def render_kpi_status_transition():
                 "_FreqBand",
             ]
         ].drop_duplicates().copy()
+    elif not transition_result.empty:
+        # A pasted Problematic Cell Target List exists, but the user has not
+        # selected a subset. Show the trend for ALL pasted targets.
+        selected_scope = transition_result[
+            [
+                "_Cell_Display",
+                "_Site_ID_Search",
+                "_FreqBand",
+            ]
+        ].drop_duplicates().copy()
+    elif not site_level_df.empty:
+        # No Problematic Cell Target List / no explicit target selection:
+        # fall back to the normal Site Search scope so the trend chart still
+        # renders using the dashboard's existing site/eNodeB search behavior.
+        fallback_cols = [
+            "_Cell_Display",
+            "_Site_ID_Search",
+            "_FreqBand",
+        ]
+        if all(col in site_level_df.columns for col in fallback_cols):
+            selected_scope = site_level_df[fallback_cols].drop_duplicates().copy()
+        else:
+            selected_scope = pd.DataFrame(
+                columns=fallback_cols
+            )
+    else:
+        selected_scope = pd.DataFrame(
+            columns=[
+                "_Cell_Display",
+                "_Site_ID_Search",
+                "_FreqBand",
+            ]
+        )
 
         # IMPORTANT:
         # The combo chart must use the KPIs selected in "KPIs to Compare",
@@ -4144,7 +4185,7 @@ def render_kpi_status_transition():
                     )
 
                 fig_selected.update_layout(
-                    title=f"{kpi_name} — Selected Problem Cell/Site",
+                    title=f"{kpi_name} — Cell Name Trend",
                     height=560,
                     template="plotly_white",
                     margin=dict(
@@ -4178,9 +4219,10 @@ def render_kpi_status_transition():
             # Generic combo chart for the selected target scope.
             # This remains available even when the current transition is
             # Remain Meet, because it is for investigation.
-            if len(scope_kpis) >= 1:
+            if selected_target_labels and len(scope_kpis) >= 1:
                 st.markdown("#### 🔬 KPI Correlation — Selected Cell/Site")
                 st.caption(
+                    "Problem Cell / Site selection controls this correlation chart. "
                     "Primary KPI comes from KPIs to Compare. Counter KPI can be "
                     "any available KPI, so you can correlate RANK2/SSSR/Availability "
                     "with Average TA, CQI, PRB, Payload, etc."
