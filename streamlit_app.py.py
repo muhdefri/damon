@@ -4181,16 +4181,16 @@ def render_configurable_kpi_analysis():
     # can evaluate the KPI over:
     #   1) Daily              -> one result per date
     #   2) Average Date Range -> average KPI across the selected range
-    #   3) Compare 2 Dates    -> compare two selected dates side-by-side
+    #   3) Compare 2 Dates    -> compare two selectable date ranges side-by-side
     #
     # This is useful for RNO checks such as:
     #   01-Oct to 03-Oct -> average SSSR vs threshold
-    #   01-Sep vs 01-Oct -> KPI result on each date vs threshold
+    #   01-Sep to 03-Sep vs 01-Oct to 05-Oct -> average KPI for each selected range vs threshold
     # ------------------------------------------------------------
     st.markdown("**Date Evaluation**")
 
     date_eval_col, date_a_col, date_b_col = st.columns(
-        [1.8, 1.2, 1.2],
+        [1.5, 1.35, 1.35],
         gap="small",
     )
 
@@ -4207,8 +4207,8 @@ def render_configurable_kpi_analysis():
             help=(
                 "Daily = one result per date. "
                 "Average Date Range = average KPI over the selected "
-                "date range. Compare 2 Dates = compare two dates "
-                "side-by-side against the same threshold."
+                "date range. Compare 2 Dates = compare two selectable "
+                "date ranges; each range can contain one day or multiple days."
             ),
         )
 
@@ -4224,49 +4224,106 @@ def render_configurable_kpi_analysis():
 
     compare_date_a = None
     compare_date_b = None
+    compare_date_a_range = None
+    compare_date_b_range = None
 
     if date_evaluation_mode == "Compare 2 Dates":
-        if len(available_analysis_dates) < 2:
+        if len(available_analysis_dates) < 1:
             st.warning(
-                "Compare 2 Dates requires at least two different dates "
+                "Compare 2 Dates requires at least one available date "
                 "in the current KPI Analysis filter."
             )
         else:
-            previous_a = st.session_state.get(
-                "custom_kpi_analysis_compare_date_a"
+            min_analysis_date = available_analysis_dates[0]
+            max_analysis_date = available_analysis_dates[-1]
+
+            # Use separate keys from the old single-date selectboxes so
+            # Streamlit does not reuse an incompatible scalar state.
+            previous_a_range = st.session_state.get(
+                "custom_kpi_analysis_compare_date_a_range"
             )
-            previous_b = st.session_state.get(
-                "custom_kpi_analysis_compare_date_b"
+            previous_b_range = st.session_state.get(
+                "custom_kpi_analysis_compare_date_b_range"
             )
 
-            default_a = (
-                previous_a
-                if previous_a in available_analysis_dates
-                else available_analysis_dates[0]
+            def normalize_date_range_state(previous, default_date):
+                if (
+                    isinstance(previous, (tuple, list))
+                    and len(previous) == 2
+                    and all(
+                        isinstance(value, __import__("datetime").date)
+                        for value in previous
+                    )
+                ):
+                    start_date, end_date = previous
+                    start_date = max(start_date, min_analysis_date)
+                    end_date = min(end_date, max_analysis_date)
+                    if start_date <= end_date:
+                        return (start_date, end_date)
+
+                return (default_date, default_date)
+
+            default_a_range = normalize_date_range_state(
+                previous_a_range,
+                min_analysis_date,
             )
-            default_b = (
-                previous_b
-                if previous_b in available_analysis_dates
-                else available_analysis_dates[-1]
+            default_b_range = normalize_date_range_state(
+                previous_b_range,
+                max_analysis_date,
             )
 
             with date_a_col:
-                compare_date_a = st.selectbox(
+                compare_date_a_range = st.date_input(
                     "Date A",
-                    available_analysis_dates,
-                    index=available_analysis_dates.index(default_a),
-                    format_func=lambda value: value.strftime("%d-%b-%Y"),
-                    key="custom_kpi_analysis_compare_date_a",
+                    value=default_a_range,
+                    min_value=min_analysis_date,
+                    max_value=max_analysis_date,
+                    format="DD-MMM-YYYY",
+                    key="custom_kpi_analysis_compare_date_a_range",
+                    help=(
+                        "Select one date for a single-day comparison, "
+                        "or select a start and end date to calculate the "
+                        "KPI over multiple days."
+                    ),
                 )
 
             with date_b_col:
-                compare_date_b = st.selectbox(
+                compare_date_b_range = st.date_input(
                     "Date B",
-                    available_analysis_dates,
-                    index=available_analysis_dates.index(default_b),
-                    format_func=lambda value: value.strftime("%d-%b-%Y"),
-                    key="custom_kpi_analysis_compare_date_b",
+                    value=default_b_range,
+                    min_value=min_analysis_date,
+                    max_value=max_analysis_date,
+                    format="DD-MMM-YYYY",
+                    key="custom_kpi_analysis_compare_date_b_range",
+                    help=(
+                        "Select one date for a single-day comparison, "
+                        "or select a start and end date to calculate the "
+                        "KPI over multiple days."
+                    ),
                 )
+
+            # Streamlit returns a date for a single selected day and a
+            # tuple for a selected range. Normalize both into (start, end).
+            if isinstance(compare_date_a_range, tuple):
+                compare_date_a_start, compare_date_a_end = compare_date_a_range
+            else:
+                compare_date_a_start = compare_date_a_range
+                compare_date_a_end = compare_date_a_range
+
+            if isinstance(compare_date_b_range, tuple):
+                compare_date_b_start, compare_date_b_end = compare_date_b_range
+            else:
+                compare_date_b_start = compare_date_b_range
+                compare_date_b_end = compare_date_b_range
+
+            compare_date_a = (
+                compare_date_a_start,
+                compare_date_a_end,
+            )
+            compare_date_b = (
+                compare_date_b_start,
+                compare_date_b_end,
+            )
 
     st.caption(
         (
@@ -4274,7 +4331,9 @@ def render_configurable_kpi_analysis():
             if date_evaluation_mode == "Average Date Range"
             else
             (
-                "Compare Date A vs Date B using the same KPI threshold."
+                "Compare Date A vs Date B. Each side can be one day or "
+                "a multi-day range; the KPI is aggregated across the "
+                "selected days using the same aggregation rule."
                 if date_evaluation_mode == "Compare 2 Dates"
                 else
                 "Daily evaluation checks each date independently."
@@ -5706,13 +5765,26 @@ def render_configurable_kpi_analysis():
             if (
                 compare_date_a is not None
                 and compare_date_b is not None
-                and compare_date_a != compare_date_b
+                and len(compare_date_a) == 2
+                and len(compare_date_b) == 2
             ):
 
-                def aggregate_for_date(selected_date):
+                compare_a_start, compare_a_end = compare_date_a
+                compare_b_start, compare_b_end = compare_date_b
+
+                def aggregate_for_date_range(selected_start, selected_end):
+                    start_ts = pd.Timestamp(selected_start)
+                    end_ts = pd.Timestamp(selected_end)
+
                     date_source = valid_summary_source[
-                        valid_summary_source["_Summary_Date"]
-                        == pd.Timestamp(selected_date)
+                        (
+                            valid_summary_source["_Summary_Date"]
+                            >= start_ts
+                        )
+                        & (
+                            valid_summary_source["_Summary_Date"]
+                            <= end_ts
+                        )
                     ].copy()
 
                     if date_source.empty:
@@ -5728,21 +5800,22 @@ def render_configurable_kpi_analysis():
                         .agg(summary_agg)
                     )
 
-                date_a_df = aggregate_for_date(compare_date_a)
-                date_b_df = aggregate_for_date(compare_date_b)
+                date_a_df = aggregate_for_date_range(
+                    compare_a_start,
+                    compare_a_end,
+                )
+                date_b_df = aggregate_for_date_range(
+                    compare_b_start,
+                    compare_b_end,
+                )
 
                 value_col = "_KPI_Result_Value"
 
                 date_a_df = date_a_df.rename(
-                    columns={
-                        value_col: "Date A KPI",
-                    }
+                    columns={value_col: "Date A KPI"}
                 )
-
                 date_b_df = date_b_df.rename(
-                    columns={
-                        value_col: "Date B KPI",
-                    }
+                    columns={value_col: "Date B KPI"}
                 )
 
                 if date_a_df.empty and date_b_df.empty:
@@ -5761,20 +5834,33 @@ def render_configurable_kpi_analysis():
                         columns=rename_map
                     )
 
-                    compare_summary["Date A"] = (
-                        pd.Timestamp(compare_date_a)
-                        .strftime("%d-%b-%Y")
+                    def format_compare_range(start_date, end_date):
+                        if start_date == end_date:
+                            return pd.Timestamp(start_date).strftime(
+                                "%d-%b-%Y"
+                            )
+                        return (
+                            f"{pd.Timestamp(start_date):%d-%b-%Y}"
+                            f" → "
+                            f"{pd.Timestamp(end_date):%d-%b-%Y}"
+                        )
+
+                    date_a_label = format_compare_range(
+                        compare_a_start,
+                        compare_a_end,
                     )
-                    compare_summary["Date B"] = (
-                        pd.Timestamp(compare_date_b)
-                        .strftime("%d-%b-%Y")
+                    date_b_label = format_compare_range(
+                        compare_b_start,
+                        compare_b_end,
                     )
+
+                    compare_summary["Date A"] = date_a_label
+                    compare_summary["Date B"] = date_b_label
 
                     compare_summary["Remark A"] = (
                         compare_summary["Date A KPI"]
                         .apply(evaluate_remark)
                     )
-
                     compare_summary["Remark B"] = (
                         compare_summary["Date B KPI"]
                         .apply(evaluate_remark)
@@ -5803,21 +5889,21 @@ def render_configurable_kpi_analysis():
                         if col in compare_summary.columns
                     ]
 
-                    compare_summary = compare_summary[
-                        compare_cols
-                    ]
+                    compare_summary = compare_summary[compare_cols]
 
-                    compare_summary = compare_summary.sort_values(
-                        [
-                            col
-                            for col in [
-                                "Sector",
-                                "FreqBand",
-                                "Cell Name",
-                            ]
-                            if col in compare_summary.columns
+                    sort_cols = [
+                        col
+                        for col in [
+                            "Sector",
+                            "FreqBand",
+                            "Cell Name",
                         ]
-                    )
+                        if col in compare_summary.columns
+                    ]
+                    if sort_cols:
+                        compare_summary = compare_summary.sort_values(
+                            sort_cols
+                        )
 
                     for value_col in [
                         "Date A KPI",
@@ -5832,55 +5918,42 @@ def render_configurable_kpi_analysis():
                     compare_summary["Threshold"] = float(threshold)
 
                     meet_a = int(
-                        (
-                            compare_summary["Remark A"]
-                            == "Meet"
-                        ).sum()
+                        (compare_summary["Remark A"] == "Meet").sum()
                     )
                     not_meet_a = int(
-                        (
-                            compare_summary["Remark A"]
-                            == "Not Meet"
-                        ).sum()
+                        (compare_summary["Remark A"] == "Not Meet").sum()
                     )
                     meet_b = int(
-                        (
-                            compare_summary["Remark B"]
-                            == "Meet"
-                        ).sum()
+                        (compare_summary["Remark B"] == "Meet").sum()
                     )
                     not_meet_b = int(
-                        (
-                            compare_summary["Remark B"]
-                            == "Not Meet"
-                        ).sum()
+                        (compare_summary["Remark B"] == "Not Meet").sum()
                     )
 
                     st.markdown("### 📋 KPI Result Summary")
 
                     st.caption(
-                        f"Compare "
-                        f"{pd.Timestamp(compare_date_a):%d-%b-%Y}"
-                        f" vs "
-                        f"{pd.Timestamp(compare_date_b):%d-%b-%Y}. "
-                        f"Threshold = {threshold:g}."
+                        f"Compare {date_a_label} vs {date_b_label}. "
+                        f"Threshold = {threshold:g}. "
+                        "Each selected range is aggregated using "
+                        "the current KPI aggregation rule."
                     )
 
                     cm1, cm2, cm3, cm4 = st.columns(4)
                     cm1.metric(
-                        f"Meet — {pd.Timestamp(compare_date_a):%d-%b}",
+                        f"Meet — A ({date_a_label})",
                         f"{meet_a:,}",
                     )
                     cm2.metric(
-                        f"Not Meet — {pd.Timestamp(compare_date_a):%d-%b}",
+                        f"Not Meet — A ({date_a_label})",
                         f"{not_meet_a:,}",
                     )
                     cm3.metric(
-                        f"Meet — {pd.Timestamp(compare_date_b):%d-%b}",
+                        f"Meet — B ({date_b_label})",
                         f"{meet_b:,}",
                     )
                     cm4.metric(
-                        f"Not Meet — {pd.Timestamp(compare_date_b):%d-%b}",
+                        f"Not Meet — B ({date_b_label})",
                         f"{not_meet_b:,}",
                     )
 
@@ -5905,13 +5978,9 @@ def render_configurable_kpi_analysis():
                         hide_index=True,
                     )
 
-            elif (
-                compare_date_a is not None
-                and compare_date_b is not None
-                and compare_date_a == compare_date_b
-            ):
+            else:
                 st.warning(
-                    "Date A and Date B must be different for comparison."
+                    "Please select valid Date A and Date B ranges."
                 )
 
     if analysis_scope == "Site Level":
