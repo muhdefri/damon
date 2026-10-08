@@ -3060,7 +3060,7 @@ for kpi_name in main_chart_kpis:
                     sector,
                 )
 
-    else:
+    elif chart_layout == "Horizontal":
 
         charts_per_row = 3
 
@@ -7161,9 +7161,9 @@ def _bar_xaxis_padding(series):
     return diffs.min() / 2
 
 
-# KPI Analysis is a fourth, independent Chart Layout.
-# When selected, the normal Horizontal / Vertical / 2 Charts renderer
-# is bypassed and the dedicated analysis sections are shown instead.
+# KPI Analysis and KPI Status Transition are independent Chart Layouts.
+# When either is selected, the normal Horizontal / Vertical / 2 Charts
+# renderer is bypassed and only its dedicated section is shown.
 if chart_layout == "KPI Analysis":
     render_configurable_kpi_analysis()
     render_kpi_analysis()
@@ -7173,7 +7173,7 @@ if chart_layout == "KPI Status Transition":
 
 
 # ============================================================
-# SITE LEVEL SUMMARY — NON-KPI ANALYSIS LAYOUTS ONLY
+# SITE LEVEL SUMMARY — NON-KPI ANALYSIS / TRANSITION LAYOUTS ONLY
 # ============================================================
 #
 # Excel-style site summary:
