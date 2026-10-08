@@ -4412,6 +4412,51 @@ def render_configurable_kpi_analysis():
     )
 
     # ------------------------------------------------------------
+    # KPI CHART STATUS FILTER
+    # ------------------------------------------------------------
+    # Keep the existing "All" behavior and add:
+    #   - Meet Only
+    #   - Not Meet Only
+    #
+    # Status is determined from the PRIMARY KPI and the configured
+    # threshold. For a Cell-level trend chart, a cell is classified by
+    # its latest available primary-KPI value in the current filtered
+    # analysis period. This gives a stable cell-level filter while the
+    # chart itself still shows the complete trend for that cell.
+    #
+    # For Site Level, the filter is kept available but does not remove
+    # the aggregated site series.
+    status_filter_col, status_info_col = st.columns(
+        [1.35, 3.65],
+        gap="small",
+    )
+
+    with status_filter_col:
+        chart_status_filter = st.selectbox(
+            "Chart Cell Status",
+            [
+                "All",
+                "Meet Only",
+                "Not Meet Only",
+            ],
+            key="custom_kpi_analysis_chart_status_filter",
+            help=(
+                "All = show all selected cells. "
+                "Meet Only = show cells whose latest primary KPI "
+                "meets the threshold. "
+                "Not Meet Only = show cells whose latest primary KPI "
+                "does not meet the threshold."
+            ),
+        )
+
+    with status_info_col:
+        st.caption(
+            f"Status is based on the latest available {primary_kpi} "
+            f"value per Cell Name versus threshold {threshold:g}. "
+            "The selected cell's full trend remains visible."
+        )
+
+    # ------------------------------------------------------------
     # DATE EVALUATION MODE
     # ------------------------------------------------------------
     # The KPI chart remains date-by-date, while the Result Summary
@@ -4683,6 +4728,113 @@ def render_configurable_kpi_analysis():
     if custom_df.empty:
         st.warning("No data available for the selected KPI combination.")
         return
+
+    # ------------------------------------------------------------
+    # APPLY CELL MEET / NOT MEET FILTER
+    # ------------------------------------------------------------
+    # We classify each Cell Name using the latest available PRIMARY KPI
+    # value in the current filtered analysis period. We then keep the
+    # complete time-series rows for the selected cells so the trend is
+    # not truncated to only the points that meet the threshold.
+    if (
+        effective_cell_level
+        and "_Analysis_Cell" in custom_df.columns
+        and chart_status_filter != "All"
+        and primary_kpi in custom_df.columns
+    ):
+        status_source = custom_df[
+            [
+                "_Analysis_Cell",
+                "_Chart_Date",
+                primary_kpi,
+            ]
+        ].copy()
+
+        status_source[primary_kpi] = pd.to_numeric(
+            status_source[primary_kpi],
+            errors="coerce",
+        )
+
+        status_source = status_source.dropna(
+            subset=[primary_kpi]
+        )
+
+        if not status_source.empty:
+            latest_status = (
+                status_source
+                .sort_values(
+                    [
+                        "_Analysis_Cell",
+                        "_Chart_Date",
+                    ]
+                )
+                .groupby(
+                    "_Analysis_Cell",
+                    as_index=False,
+                )
+                .tail(1)
+            )
+
+            latest_status = latest_status[
+                [
+                    "_Analysis_Cell",
+                    primary_kpi,
+                ]
+            ].copy()
+
+            if primary_kpi.upper() == "PAYLOAD":
+                # Payload is normally evaluated as a threshold KPI only
+                # when the user explicitly sets one. Keep the same generic
+                # higher-is-better rule used by this filter.
+                latest_status["_Status"] = np.where(
+                    latest_status[primary_kpi] >= float(threshold),
+                    "Meet",
+                    "Not Meet",
+                )
+            else:
+                latest_status["_Status"] = np.where(
+                    latest_status[primary_kpi] >= float(threshold),
+                    "Meet",
+                    "Not Meet",
+                )
+
+            if chart_status_filter == "Meet Only":
+                allowed_cells = set(
+                    latest_status.loc[
+                        latest_status["_Status"] == "Meet",
+                        "_Analysis_Cell",
+                    ]
+                    .astype(str)
+                )
+            else:
+                allowed_cells = set(
+                    latest_status.loc[
+                        latest_status["_Status"] == "Not Meet",
+                        "_Analysis_Cell",
+                    ]
+                    .astype(str)
+                )
+
+            custom_df = custom_df[
+                custom_df["_Analysis_Cell"]
+                .astype(str)
+                .isin(allowed_cells)
+            ].copy()
+
+            if custom_df.empty:
+                st.info(
+                    f"No Cell Name is classified as "
+                    f"'{chart_status_filter}' based on the latest "
+                    f"{primary_kpi} value in the selected analysis period."
+                )
+                return
+
+            st.caption(
+                f"📌 Chart filter: **{chart_status_filter}** — "
+                f"{len(allowed_cells):,} Cell Name(s) shown. "
+                f"Classification uses the latest {primary_kpi} value "
+                f"vs threshold {threshold:g}; the full trend remains visible."
+            )
 
     # Detect hourly vs daily display.
     if analysis_is_hourly:
