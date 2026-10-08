@@ -3652,24 +3652,24 @@ def render_kpi_status_transition():
         direction = target_row["Direction"]
 
         if direction == "Higher is Better":
-            merged["Status Beforefterefore"] = merged["Before"].ge(target_value).map(
+            merged["Status Before"] = merged["Before"].ge(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
-            merged["Status Beforefter"] = merged["After"].ge(target_value).map(
+            merged["Status After"] = merged["After"].ge(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
         else:
-            merged["Status Beforefterefore"] = merged["Before"].le(target_value).map(
+            merged["Status Before"] = merged["Before"].le(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
-            merged["Status Beforefter"] = merged["After"].le(target_value).map(
+            merged["Status After"] = merged["After"].le(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
 
         merged["Transition"] = (
-            merged["Status Beforefterefore"].fillna("No Data")
+            merged["Status Before"].fillna("No Data")
             + " → "
-            + merged["Status Beforefter"].fillna("No Data")
+            + merged["Status After"].fillna("No Data")
         )
 
         merged["Target"] = target_value
@@ -3711,7 +3711,7 @@ def render_kpi_status_transition():
 
     if transition_filter == "Not Meet Only":
         display_df = transition_result[
-            transition_result["Status Beforefter"].eq("Not Meet")
+            transition_result["Status After"].eq("Not Meet")
         ].copy()
     elif transition_filter == "No Data":
         display_df = transition_result[
