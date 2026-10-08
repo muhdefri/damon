@@ -4082,246 +4082,277 @@ def render_kpi_status_transition():
             return pd.concat(parts, ignore_index=True)
 
         # --------------------------------------------------------
-        # RANK2 Rate + Counter KPI combo chart.
+        # GENERIC KPI + COUNTER KPI COMBO CHART
         # --------------------------------------------------------
-        rank2_pairs = action_pairs[
-            action_pairs["KPI"].eq("RANK2 Rate")
+        # The combo chart is NOT limited to RANK2 Rate.
+        # Any KPI selected in "KPIs to Compare" can be used as the
+        # primary KPI, with any other available KPI as the counter KPI.
+        compare_candidates = [
+            k for k in kpi_actual_columns.keys()
+            if k in KPI_CONFIG
+        ]
+
+        # Preserve the KPI order selected by the user, when available.
+        selected_compare_kpis = [
+            k for k in selected_kpis_to_compare
+            if k in compare_candidates
+        ]
+
+        if not selected_compare_kpis:
+            selected_compare_kpis = sorted(compare_candidates)
+
+        primary_kpi = st.selectbox(
+            "Primary KPI for Combo Trend",
+            selected_compare_kpis,
+            index=0,
+            key="primary_combo_kpi_v34",
+            help=(
+                "Choose any KPI from KPIs to Compare as the left-axis "
+                "primary KPI."
+            ),
+        )
+
+        counter_candidates = [
+            k for k in compare_candidates
+            if k != primary_kpi
+        ]
+
+        counter_options = ["None"] + counter_candidates
+
+        counter_kpi = st.selectbox(
+            "Counter KPI",
+            counter_options,
+            index=0,
+            key="counter_combo_kpi_v34",
+            help=(
+                "Optional second KPI for the right Y-axis. "
+                "Choose None to show only the primary KPI."
+            ),
+        )
+
+        primary_pairs = action_pairs[
+            action_pairs["KPI"].eq(primary_kpi)
         ].copy()
 
-        if not rank2_pairs.empty:
-            counter_candidates = [
-                kpi for kpi in available_kpis
-                if kpi in kpi_actual_columns
-                and kpi != "RANK2 Rate"
-                and kpi not in {"TA Distribution"}
-            ]
+        # If the primary KPI is not currently in Not Meet Only results,
+        # use the selected target Cell/Site list as the trend scope.
+        if primary_pairs.empty:
+            primary_pairs = target_selector_df[
+                [
+                    "_Cell_Display",
+                    "_Site_ID_Search",
+                    "_FreqBand",
+                ]
+            ].drop_duplicates().copy()
+            primary_pairs["KPI"] = primary_kpi
 
-            # Counter KPI is OPTIONAL.
-            # Do not force Average TA as the default, and allow the user
-            # to select "None" when only RANK2 Rate is needed.
-            counter_options = ["None"] + counter_candidates
+        primary_history = build_target_history(
+            primary_pairs,
+            primary_kpi,
+        )
 
-            counter_kpi = st.selectbox(
-                "Counter KPI for RANK2 Rate",
-                counter_options,
-                index=0,
-                key="rank2_counter_kpi_v31",
-                help=(
-                    "Optional KPI for the right Y-axis. "
-                    "Average TA is available but is not selected automatically. "
-                    "Choose None to show RANK2 Rate only."
-                ),
+        counter_history = pd.DataFrame()
+
+        if counter_kpi != "None":
+            counter_history = build_target_history(
+                primary_pairs,
+                counter_kpi,
             )
 
-            rank2_history = build_target_history(
-                rank2_pairs,
-                "RANK2 Rate",
+        if primary_history.empty:
+            st.info(
+                f"No historical data found for the selected primary KPI "
+                f"({primary_kpi}) and current target Cell/Site scope."
+            )
+        else:
+            fig_combo = go.Figure()
+
+            # KPI identity is separated by color:
+            # Primary KPI = blue solid
+            # Counter KPI = orange dashed
+            primary_color = "#4472C4"
+            counter_color = "#ED7D31"
+
+            legends = sorted(
+                primary_history["Legend"].dropna().unique()
             )
 
-            counter_history = pd.DataFrame()
-            if counter_kpi != "None":
-                counter_history = build_target_history(
-                    rank2_pairs,
-                    counter_kpi,
+            for legend_name in legends:
+                r = primary_history[
+                    primary_history["Legend"].eq(legend_name)
+                ].sort_values("_Date")
+
+                cell_name = str(r["Cell Name"].iloc[0])
+
+                fig_combo.add_trace(
+                    go.Scatter(
+                        x=r["_Date"],
+                        y=r["Value"],
+                        mode="lines+markers",
+                        name=f"{primary_kpi} — {cell_name}",
+                        legendgroup=legend_name,
+                        showlegend=True,
+                        line=dict(
+                            color=primary_color,
+                            width=2.5,
+                        ),
+                        marker=dict(size=4),
+                        connectgaps=True,
+                        yaxis="y",
+                    )
                 )
 
-                if not rank2_history.empty:
-                    fig_combo = go.Figure()
+                if not counter_history.empty:
+                    c = counter_history[
+                        counter_history["Legend"].eq(legend_name)
+                    ].sort_values("_Date")
 
-                    # KPI identity is intentionally separated by color:
-                    # RANK2 Rate = blue + solid
-                    # Counter KPI (e.g. Average TA) = orange + dashed.
-                    # Cell Name is identified in the legend/hover text.
-                    rank2_color = "#4472C4"
-                    counter_color = "#ED7D31"
-
-                    legends = sorted(
-                        rank2_history["Legend"].dropna().unique()
-                    )
-
-                    for legend_name in legends:
-                        r = rank2_history[
-                            rank2_history["Legend"].eq(legend_name)
-                        ].sort_values("_Date")
-
-                        cell_name = str(r["Cell Name"].iloc[0])
-
+                    if not c.empty:
                         fig_combo.add_trace(
                             go.Scatter(
-                                x=r["_Date"],
-                                y=r["Value"],
+                                x=c["_Date"],
+                                y=c["Value"],
                                 mode="lines+markers",
-                                name=f"RANK2 Rate — {cell_name}",
+                                name=f"{counter_kpi} — {cell_name}",
                                 legendgroup=legend_name,
+                                showlegend=True,
                                 line=dict(
-                                    color=rank2_color,
-                                    width=2.5,
+                                    color=counter_color,
+                                    width=2,
+                                    dash="dash",
                                 ),
-                                marker=dict(size=4),
+                                marker=dict(
+                                    size=3,
+                                    symbol="circle-open",
+                                ),
                                 connectgaps=True,
-                                yaxis="y",
-                                hovertemplate=(
-                                    f"<b>{cell_name}</b><br>"
-                                    "Date: %{x|%d-%b-%Y}<br>"
-                                    "RANK2 Rate: %{y:.2f}<extra></extra>"
-                                ),
-                            )
-                        )
-
-                        if not counter_history.empty:
-                            c = counter_history[
-                                counter_history["Legend"].eq(legend_name)
-                            ].sort_values("_Date")
-
-                            if not c.empty:
-                                fig_combo.add_trace(
-                                    go.Scatter(
-                                        x=c["_Date"],
-                                        y=c["Value"],
-                                        mode="lines+markers",
-                                        name=f"{counter_kpi} — {cell_name}",
-                                        legendgroup=legend_name,
-                                        showlegend=True,
-                                        line=dict(
-                                            color=counter_color,
-                                            width=2,
-                                            dash="dash",
-                                        ),
-                                        marker=dict(
-                                            size=3,
-                                            symbol="circle-open",
-                                        ),
-                                        connectgaps=True,
-                                        yaxis="y2",
-                                        hovertemplate=(
-                                            f"<b>{cell_name}</b><br>"
-                                            "Date: %{x|%d-%b-%Y}<br>"
-                                            f"{counter_kpi}: %{{y:.2f}}"
-                                            "<extra></extra>"
-                                        ),
-                                    )
-                                )
-
-                    # RANK2 target on left axis.
-                    rank2_target_row = target_df[
-                        target_df["KPI"].eq("RANK2 Rate")
-                    ]
-
-                    if not rank2_target_row.empty:
-                        rank2_target = float(
-                            rank2_target_row["Target"].iloc[0]
-                        )
-                        x_min = rank2_history["_Date"].min()
-                        x_max = rank2_history["_Date"].max()
-
-                        fig_combo.add_trace(
-                            go.Scatter(
-                                x=[x_min, x_max],
-                                y=[rank2_target, rank2_target],
-                                mode="lines",
-                                name=f"RANK2 Target ({rank2_target:g})",
-                                line=dict(
-                                    color="#000000",
-                                    dash="dot",
-                                    width=2,
-                                ),
-                                yaxis="y",
-                            )
-                        )
-
-                    # Counter KPI target on right axis, if configured.
-                    counter_target_row = (
-                        target_df[target_df["KPI"].eq(counter_kpi)]
-                        if counter_kpi != "None"
-                        else pd.DataFrame()
-                    )
-
-                    if not counter_target_row.empty and not counter_history.empty:
-                        counter_target = float(
-                            counter_target_row["Target"].iloc[0]
-                        )
-                        fig_combo.add_trace(
-                            go.Scatter(
-                                x=[
-                                    counter_history["_Date"].min(),
-                                    counter_history["_Date"].max(),
-                                ],
-                                y=[counter_target, counter_target],
-                                mode="lines",
-                                name=f"{counter_kpi} Target ({counter_target:g})",
-                                line=dict(
-                                    color="#666666",
-                                    dash="dot",
-                                    width=2,
-                                ),
                                 yaxis="y2",
                             )
                         )
 
-                    fig_combo.update_layout(
-                        title=(
-                            f"RANK2 Rate vs {counter_kpi} — "
-                            "Current Not Meet Cells"
-                        ),
-                        height=max(
-                            560,
-                            500 + (
-                                max(1, len(legends) - 1) // 4
-                            ) * 35,
-                        ),
-                        template="plotly_white",
-                        margin=dict(
-                            l=65,
-                            r=75,
-                            t=65,
-                            b=135,
-                        ),
-                        hovermode="x unified",
-                        xaxis=dict(
-                            title="Date",
-                            tickformat="%d-%b-%y",
-                            showgrid=True,
-                        ),
-                        yaxis=dict(
-                            title="RANK2 Rate",
-                            side="left",
-                            showgrid=True,
-                        ),
-                        yaxis2=dict(
-                            title=counter_kpi if counter_kpi != "None" else "",
-                            side="right",
-                            overlaying="y",
-                            showgrid=False,
-                            showticklabels=(counter_kpi != "None"),
-                        ),
-                        legend=dict(
-                            orientation="h",
-                            yanchor="top",
-                            y=-0.24,
-                            xanchor="center",
-                            x=0.5,
-                        ),
-                    )
+            # Primary KPI target line.
+            primary_target_row = target_df[
+                target_df["KPI"].eq(primary_kpi)
+            ]
 
-                    show_chart(
-                        fig_combo,
-                        use_container_width=True,
+            if not primary_target_row.empty:
+                primary_target = float(
+                    primary_target_row["Target"].iloc[0]
+                )
+                fig_combo.add_trace(
+                    go.Scatter(
+                        x=[
+                            primary_history["_Date"].min(),
+                            primary_history["_Date"].max(),
+                        ],
+                        y=[primary_target, primary_target],
+                        mode="lines",
+                        name=f"{primary_kpi} Target ({primary_target:g})",
+                        line=dict(
+                            color="#000000",
+                            dash="dot",
+                            width=2,
+                        ),
+                        yaxis="y",
                     )
+                )
 
-                    if counter_kpi == "None":
-                        st.caption(
-                            "Blue solid = RANK2 Rate | "
-                            "Counter KPI = None | "
-                            "Cell Name is shown in the legend"
-                        )
-                    else:
-                        st.caption(
-                            f"Blue solid = RANK2 Rate | "
-                            f"Orange dashed = {counter_kpi} | "
-                            f"Left axis = RANK2 Rate | "
-                            f"Right axis = {counter_kpi} | "
-                            f"Cell Name is shown in the legend"
-                        )
+            # Counter KPI target line, if configured.
+            counter_target_row = (
+                target_df[target_df["KPI"].eq(counter_kpi)]
+                if counter_kpi != "None"
+                else pd.DataFrame()
+            )
+
+            if not counter_target_row.empty and not counter_history.empty:
+                counter_target = float(
+                    counter_target_row["Target"].iloc[0]
+                )
+                fig_combo.add_trace(
+                    go.Scatter(
+                        x=[
+                            counter_history["_Date"].min(),
+                            counter_history["_Date"].max(),
+                        ],
+                        y=[counter_target, counter_target],
+                        mode="lines",
+                        name=f"{counter_kpi} Target ({counter_target:g})",
+                        line=dict(
+                            color="#666666",
+                            dash="dot",
+                            width=2,
+                        ),
+                        yaxis="y2",
+                    )
+                )
+
+            fig_combo.update_layout(
+                title=(
+                    f"{primary_kpi}"
+                    + (
+                        f" vs {counter_kpi}"
+                        if counter_kpi != "None"
+                        else ""
+                    )
+                    + " — Trend by Cell Name"
+                ),
+                height=max(
+                    560,
+                    500 + (max(1, len(legends) - 1) // 4) * 35,
+                ),
+                template="plotly_white",
+                margin=dict(
+                    l=65,
+                    r=75,
+                    t=65,
+                    b=145,
+                ),
+                hovermode="x unified",
+                xaxis=dict(
+                    title="Date",
+                    tickformat="%d-%b-%y",
+                    showgrid=True,
+                ),
+                yaxis=dict(
+                    title=primary_kpi,
+                    side="left",
+                    showgrid=True,
+                ),
+                yaxis2=dict(
+                    title=counter_kpi if counter_kpi != "None" else "",
+                    side="right",
+                    overlaying="y",
+                    showgrid=False,
+                    showticklabels=(counter_kpi != "None"),
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.25,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+
+            show_chart(
+                fig_combo,
+                use_container_width=True,
+            )
+
+            if counter_kpi == "None":
+                st.caption(
+                    f"Blue solid = {primary_kpi} | "
+                    f"Counter KPI = None | "
+                    f"Cell Name is shown in the legend"
+                )
+            else:
+                st.caption(
+                    f"Blue solid = {primary_kpi} | "
+                    f"Orange dashed = {counter_kpi} | "
+                    f"Left axis = {primary_kpi} | "
+                    f"Right axis = {counter_kpi} | "
+                    f"Cell Name is shown in the legend"
+                )
 
         # --------------------------------------------------------
         # Other Not Meet KPI trend charts remain independent.
