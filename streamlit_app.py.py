@@ -1804,7 +1804,10 @@ selected_kpis = list(
     )
 )
 
-if not selected_kpis and chart_layout != "KPI Analysis":
+if not selected_kpis and chart_layout not in {
+    "KPI Analysis",
+    "KPI Status Transition",
+}:
     st.info("Select at least one KPI.")
     st.stop()
 
@@ -1826,12 +1829,19 @@ layout_col, sector_col, band_col = st.columns(
 with layout_col:
     chart_layout = st.radio(
         "Chart Layout",
-        ["Horizontal", "Vertical", "2 Charts", "KPI Analysis"],
+        [
+            "Horizontal",
+            "Vertical",
+            "2 Charts",
+            "KPI Analysis",
+            "KPI Status Transition",
+        ],
         index=0,
         horizontal=True,
         help=(
-            "Choose one independent dashboard layout: "
-            "Horizontal, Vertical, 2 Charts, or KPI Analysis."
+            "Choose one independent dashboard layout. "
+            "The existing four layouts remain unchanged; "
+            "KPI Status Transition is an additional comparison layout."
         ),
         key="chart_layout_selector",
     )
@@ -3086,6 +3096,713 @@ for kpi_name in main_chart_kpis:
                             sector,
                         )
 
+
+# ============================================================
+# KPI STATUS TRANSITION — ADDITIONAL LAYOUT
+# ============================================================
+#
+# Purpose:
+#   Compare two specific dates for an exact list of problematic
+#   Cell + Site + FreqBand targets and identify:
+#
+#       Not Meet on Date A  ->  Meet on Date B
+#
+# This is intentionally an ADDITIONAL layout. The existing:
+#   Horizontal / Vertical / 2 Charts / KPI Analysis
+# rendering paths are not modified by this section.
+# ============================================================
+
+def render_kpi_status_transition():
+    st.markdown("### 🔄 KPI Status Transition")
+    st.caption(
+        "Compare KPI status between two dates. "
+        "The main result is **Not Meet → Meet** for the selected "
+        "Cell + Site + FreqBand targets."
+    )
+
+    # ------------------------------------------------------------
+    # Exact target input
+    # ------------------------------------------------------------
+    st.markdown("#### 🎯 Problematic Cell Target List")
+
+    transition_bulk_text = st.text_area(
+        "Paste FreqBand + Cell Name + Site ID",
+        placeholder=(
+            "850\\tJB4G85_4264592E85_132\\tSUM-JA-MBN-0143\n"
+            "850\\tJB4G85_4264509E85_132\\tSUM-JA-MBN-0141\n"
+            "850\\tJB4G85_4264509E85_133\\tSUM-JA-MBN-0141"
+        ),
+        height=180,
+        key="kpi_status_transition_bulk_text",
+        help=(
+            "Paste 3 columns from Excel in any order: "
+            "FreqBand, Cell Name, Site ID/eNodeB Name."
+        ),
+    )
+
+    source_df = site_level_df.copy()
+
+    if source_df.empty:
+        st.warning("No data is available for KPI Status Transition.")
+        return
+
+    # ------------------------------------------------------------
+    # Parse exact Cell + Site + FreqBand targets.
+    # ------------------------------------------------------------
+    available_cells = set(
+        source_df["_Cell_Display"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    available_sites = set(
+        source_df["_Site_ID_Search"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    available_enodebs = set(
+        source_df["_eNodeB_Search"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    available_bands = set(
+        source_df["_FreqBand"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .map(
+            lambda value: (
+                value[1:] if value.startswith("L") else value
+            )
+        )
+        .unique()
+    )
+
+    def normalize_transition_band(value):
+        value = str(value).strip().upper()
+        return value[1:] if value.startswith("L") else value
+
+    transition_targets = []
+
+    if transition_bulk_text.strip():
+        for raw_line in transition_bulk_text.splitlines():
+            line = raw_line.strip()
+
+            if not line:
+                continue
+
+            fields = [
+                field.strip()
+                for field in re.split(r"\t|\||;", line)
+                if field.strip()
+            ]
+
+            if len(fields) < 3:
+                continue
+
+            cell_value = None
+            site_value = None
+            band_value = None
+
+            for field in fields:
+                field_upper = field.upper()
+                if field_upper in available_cells:
+                    cell_value = field_upper
+                    break
+
+            for field in fields:
+                field_upper = field.upper()
+                if field_upper in available_sites:
+                    site_value = field_upper
+                    break
+                if field_upper in available_enodebs:
+                    site_value = field_upper
+                    break
+
+            for field in fields:
+                normalized = normalize_transition_band(field)
+                if normalized in available_bands:
+                    band_value = normalized
+                    break
+
+            if cell_value and site_value and band_value:
+                target = (cell_value, site_value, band_value)
+                if target not in transition_targets:
+                    transition_targets.append(target)
+
+    if transition_bulk_text.strip() and not transition_targets:
+        st.warning(
+            "No valid Cell + Site + FreqBand targets were found. "
+            "Check the pasted values against the uploaded CSV."
+        )
+        return
+
+    # If no list is pasted, allow the current filtered dataset to be used.
+    # This keeps the new layout useful while the exact bulk list is being
+    # prepared, but the exact list remains the recommended workflow.
+    if transition_targets:
+        transition_mask = pd.Series(
+            False,
+            index=source_df.index,
+        )
+
+        for target_cell, target_site, target_band in transition_targets:
+            cell_mask = (
+                source_df["_Cell_Display"]
+                .astype(str)
+                .str.upper()
+                .eq(target_cell)
+            )
+
+            if target_site.startswith("SUM-"):
+                site_mask = (
+                    source_df["_Site_ID_Search"]
+                    .astype(str)
+                    .str.upper()
+                    .eq(target_site)
+                )
+            else:
+                site_mask = (
+                    source_df["_eNodeB_Search"]
+                    .astype(str)
+                    .str.upper()
+                    .eq(target_site)
+                )
+
+            band_mask = (
+                source_df["_FreqBand"]
+                .astype(str)
+                .str.upper()
+                .map(normalize_transition_band)
+                .eq(target_band)
+            )
+
+            transition_mask = (
+                transition_mask
+                | (cell_mask & site_mask & band_mask)
+            )
+
+        transition_source = source_df[transition_mask].copy()
+
+        st.caption(
+            "🎯 Exact target mode: "
+            f"{len(transition_targets):,} Cell + Site + FreqBand target(s)."
+        )
+    else:
+        transition_source = source_df.copy()
+        st.caption(
+            "No exact target list entered yet. "
+            "Using the current filtered dataset."
+        )
+
+    if transition_source.empty:
+        st.warning("The selected targets were not found in the dataset.")
+        return
+
+    # ------------------------------------------------------------
+    # Date A / Date B
+    # ------------------------------------------------------------
+    available_dates = sorted(
+        pd.to_datetime(
+            transition_source["_Date"],
+            errors="coerce",
+        )
+        .dropna()
+        .dt.date
+        .unique()
+        .tolist()
+    )
+
+    if len(available_dates) < 2:
+        st.warning(
+            "KPI Status Transition requires at least two available dates."
+        )
+        return
+
+    date_a_col, date_b_col = st.columns(2, gap="small")
+
+    with date_a_col:
+        transition_date_a = st.selectbox(
+            "Date A — Before",
+            available_dates,
+            index=(
+                available_dates.index(
+                    min(
+                        available_dates,
+                        key=lambda d: abs(
+                            (pd.Timestamp(d) - pd.Timestamp("2026-09-01")).days
+                        ),
+                    )
+                )
+                if available_dates
+                else 0
+            ),
+            format_func=lambda value: pd.Timestamp(value).strftime(
+                "%d-%b-%Y"
+            ),
+            key="kpi_status_transition_date_a",
+        )
+
+    with date_b_col:
+        transition_date_b = st.selectbox(
+            "Date B — After",
+            available_dates,
+            index=(
+                available_dates.index(
+                    min(
+                        available_dates,
+                        key=lambda d: abs(
+                            (pd.Timestamp(d) - pd.Timestamp("2026-10-05")).days
+                        ),
+                    )
+                )
+                if available_dates
+                else len(available_dates) - 1
+            ),
+            format_func=lambda value: pd.Timestamp(value).strftime(
+                "%d-%b-%Y"
+            ),
+            key="kpi_status_transition_date_b",
+        )
+
+    if transition_date_a == transition_date_b:
+        st.warning("Date A and Date B are the same. Select two different dates.")
+        return
+
+    # ------------------------------------------------------------
+    # KPI selection
+    # ------------------------------------------------------------
+    transition_defaults = [
+        kpi
+        for kpi in [
+            "SSSR",
+            "RRC Setup SR",
+            "E-RAB Setup SR",
+            "S1 Setup SR",
+            "4G Cell Availability",
+            "HOSR Inter",
+            "HOSR Intra",
+            "E-RAB Drop",
+        ]
+        if kpi in available_kpis
+    ]
+
+    transition_kpis = st.multiselect(
+        "KPIs to Compare",
+        available_kpis,
+        default=transition_defaults,
+        key="kpi_status_transition_kpis",
+        help="Select the KPIs whose status should be compared between Date A and Date B.",
+    )
+
+    if not transition_kpis:
+        st.info("Select at least one KPI.")
+        return
+
+    # ------------------------------------------------------------
+    # KPI targets / direction
+    # ------------------------------------------------------------
+    st.markdown("#### 🎯 KPI Target / Direction")
+    st.caption(
+        "Set the target for each KPI. Higher is Better means value >= target "
+        "is Meet; Lower is Better means value <= target is Meet."
+    )
+
+    direction_defaults = {}
+    threshold_defaults = {}
+
+    for kpi_name in transition_kpis:
+        upper = kpi_name.upper()
+
+        if any(
+            word in upper
+            for word in [
+                "DROP",
+                "ABNORMAL",
+                "PRB",
+                "UTILIZATION",
+                "INTERFERENCE",
+                "LATENCY",
+                "TA",
+            ]
+        ):
+            direction_defaults[kpi_name] = "Lower is Better"
+        else:
+            direction_defaults[kpi_name] = "Higher is Better"
+
+        if any(
+            word in upper
+            for word in [
+                "SSSR",
+                "SETUP SR",
+                "HOSR",
+                "AVAILABILITY",
+            ]
+        ):
+            threshold_defaults[kpi_name] = 99.0
+        elif "DROP" in upper:
+            threshold_defaults[kpi_name] = 0.5
+        elif "PRB" in upper or "UTILIZATION" in upper:
+            threshold_defaults[kpi_name] = 80.0
+        else:
+            threshold_defaults[kpi_name] = 0.0
+
+    target_rows = []
+    for idx, kpi_name in enumerate(transition_kpis):
+        target_col, direction_col = st.columns(
+            [1.8, 1.5],
+            gap="small",
+        )
+
+        with target_col:
+            threshold_value = st.number_input(
+                f"{kpi_name} Target",
+                value=float(threshold_defaults[kpi_name]),
+                step=0.1,
+                key=f"kpi_transition_threshold_{idx}_{kpi_name}",
+            )
+
+        with direction_col:
+            direction_value = st.selectbox(
+                f"{kpi_name} Direction",
+                ["Higher is Better", "Lower is Better"],
+                index=(
+                    0
+                    if direction_defaults[kpi_name] == "Higher is Better"
+                    else 1
+                ),
+                key=f"kpi_transition_direction_{idx}_{kpi_name}",
+            )
+
+        target_rows.append(
+            {
+                "KPI": kpi_name,
+                "Target": float(threshold_value),
+                "Direction": direction_value,
+            }
+        )
+
+    target_df = pd.DataFrame(target_rows)
+
+    # ------------------------------------------------------------
+    # Build Date A / Date B values per exact Cell + Site + FreqBand.
+    # ------------------------------------------------------------
+    identity_cols = [
+        "_Cell_Display",
+        "_Site_ID_Search",
+        "_FreqBand",
+    ]
+
+    # Keep sector/eNodeB for reporting when available.
+    report_cols = [
+        "_Cell_Display",
+        "_Site_ID_Search",
+        "_FreqBand",
+        "_Sector_Display",
+        "_eNodeB_Search",
+    ]
+
+    report_cols = [
+        col for col in report_cols
+        if col in transition_source.columns
+    ]
+
+    transition_source["_Transition_Date"] = pd.to_datetime(
+        transition_source["_Date"],
+        errors="coerce",
+    ).dt.date
+
+    all_results = []
+
+    for kpi_name in transition_kpis:
+        actual_column = kpi_actual_columns.get(kpi_name)
+
+        if not actual_column or actual_column not in transition_source.columns:
+            continue
+
+        kpi_data = transition_source[
+            report_cols + ["_Transition_Date", actual_column]
+        ].copy()
+
+        kpi_data["_KPI_Value"] = parse_kpi_numeric(
+            kpi_data[actual_column]
+        )
+
+        # If more than one record exists for a Cell/Date, use the mean.
+        daily_values = (
+            kpi_data
+            .groupby(
+                report_cols + ["_Transition_Date"],
+                as_index=False,
+                dropna=False,
+            )["_KPI_Value"]
+            .mean()
+        )
+
+        date_a_df = daily_values[
+            daily_values["_Transition_Date"] == transition_date_a
+        ].rename(
+            columns={"_KPI_Value": "Date A"}
+        )
+
+        date_b_df = daily_values[
+            daily_values["_Transition_Date"] == transition_date_b
+        ].rename(
+            columns={"_KPI_Value": "Date B"}
+        )
+
+        merge_keys = [
+            col for col in report_cols
+            if col in date_a_df.columns and col in date_b_df.columns
+        ]
+
+        if not merge_keys:
+            continue
+
+        merged = date_a_df[
+            merge_keys + ["Date A"]
+        ].merge(
+            date_b_df[
+                merge_keys + ["Date B"]
+            ],
+            on=merge_keys,
+            how="outer",
+        )
+
+        merged["KPI"] = kpi_name
+
+        target_row = target_df[
+            target_df["KPI"] == kpi_name
+        ].iloc[0]
+
+        target_value = float(target_row["Target"])
+        direction = target_row["Direction"]
+
+        if direction == "Higher is Better":
+            merged["Status A"] = merged["Date A"].ge(target_value).map(
+                {True: "Meet", False: "Not Meet"}
+            )
+            merged["Status B"] = merged["Date B"].ge(target_value).map(
+                {True: "Meet", False: "Not Meet"}
+            )
+        else:
+            merged["Status A"] = merged["Date A"].le(target_value).map(
+                {True: "Meet", False: "Not Meet"}
+            )
+            merged["Status B"] = merged["Date B"].le(target_value).map(
+                {True: "Meet", False: "Not Meet"}
+            )
+
+        merged["Transition"] = (
+            merged["Status A"].fillna("No Data")
+            + " → "
+            + merged["Status B"].fillna("No Data")
+        )
+
+        merged["Target"] = target_value
+        merged["Direction"] = direction
+
+        all_results.append(merged)
+
+    if not all_results:
+        st.warning("No KPI values could be calculated for the selected targets.")
+        return
+
+    transition_result = pd.concat(
+        all_results,
+        ignore_index=True,
+    )
+
+    # ------------------------------------------------------------
+    # Main transition filter
+    # ------------------------------------------------------------
+    transition_filter = st.selectbox(
+        "Show Transition",
+        [
+            "Not Meet → Meet",
+            "All",
+            "Meet → Meet",
+            "Not Meet → Not Meet",
+            "Meet → Not Meet",
+            "No Data",
+        ],
+        index=0,
+        key="kpi_status_transition_filter",
+    )
+
+    if transition_filter == "No Data":
+        display_df = transition_result[
+            transition_result["Transition"].str.contains(
+                "No Data",
+                na=False,
+            )
+        ].copy()
+    elif transition_filter == "All":
+        display_df = transition_result.copy()
+    else:
+        display_df = transition_result[
+            transition_result["Transition"] == transition_filter
+        ].copy()
+
+    # ------------------------------------------------------------
+    # Summary cards
+    # ------------------------------------------------------------
+    improved_count = int(
+        (
+            transition_result["Transition"]
+            == "Not Meet → Meet"
+        ).sum()
+    )
+
+    degraded_count = int(
+        (
+            transition_result["Transition"]
+            == "Meet → Not Meet"
+        ).sum()
+    )
+
+    remain_meet_count = int(
+        (
+            transition_result["Transition"]
+            == "Meet → Meet"
+        ).sum()
+    )
+
+    remain_not_meet_count = int(
+        (
+            transition_result["Transition"]
+            == "Not Meet → Not Meet"
+        ).sum()
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("Improved to Meet", improved_count)
+    c2.metric("Meet → Not Meet", degraded_count)
+    c3.metric("Remain Meet", remain_meet_count)
+    c4.metric("Remain Not Meet", remain_not_meet_count)
+
+    # ------------------------------------------------------------
+    # KPI-level improvement summary
+    # ------------------------------------------------------------
+    improved_only = transition_result[
+        transition_result["Transition"] == "Not Meet → Meet"
+    ].copy()
+
+    if not improved_only.empty:
+        kpi_summary = (
+            improved_only
+            .groupby("KPI")
+            .size()
+            .reset_index(name="Cells Improved to Meet")
+            .sort_values(
+                "Cells Improved to Meet",
+                ascending=False,
+            )
+        )
+
+        st.markdown("#### 📈 KPI Improvement Summary")
+        st.dataframe(
+            kpi_summary,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # ------------------------------------------------------------
+    # Detailed result
+    # ------------------------------------------------------------
+    st.markdown(
+        f"#### 🔎 Detail — {transition_filter}"
+    )
+
+    if display_df.empty:
+        st.info(
+            "No records match the selected transition."
+        )
+        return
+
+    display_cols = [
+        col for col in [
+            "_Site_ID_Search",
+            "_Cell_Display",
+            "_FreqBand",
+            "_Sector_Display",
+            "KPI",
+            "Date A",
+            "Status A",
+            "Date B",
+            "Status B",
+            "Target",
+            "Direction",
+            "Transition",
+        ]
+        if col in display_df.columns
+    ]
+
+    final_display = display_df[display_cols].copy()
+
+    rename_map = {
+        "_Site_ID_Search": "Site",
+        "_Cell_Display": "Cell Name",
+        "_FreqBand": "FreqBand",
+        "_Sector_Display": "Sector",
+    }
+
+    final_display = final_display.rename(
+        columns=rename_map
+    )
+
+    st.dataframe(
+        final_display,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # Optional compact chart: count of transitions by KPI.
+    transition_counts = (
+        transition_result
+        .groupby(["KPI", "Transition"])
+        .size()
+        .reset_index(name="Cells")
+    )
+
+    if not transition_counts.empty:
+        fig = px.bar(
+            transition_counts,
+            x="KPI",
+            y="Cells",
+            color="Transition",
+            barmode="group",
+            title="KPI Status Transition by KPI",
+        )
+
+        fig.update_layout(
+            template="plotly_white",
+            height=430,
+            margin=dict(l=40, r=20, t=60, b=120),
+            xaxis_title="KPI",
+            yaxis_title="Number of Cells",
+        )
+
+        show_chart(
+            fig,
+            use_container_width=True,
+            compact_summary=True,
+        )
+
+
 # ============================================================
 # KPI ANALYSIS — 2 SIDE-BY-SIDE DIAGNOSTIC CHARTS
 # ============================================================
@@ -3602,13 +4319,13 @@ def render_configurable_kpi_analysis():
     analysis_cell_site_pairs = []
     analysis_bulk_bands = []
 
-    if True:
+    if analysis_search_mode == "Site ID":
         with st.expander(
-            "🎯 KPI ANALYSIS — BULK CELL + SITE + FREQBAND INPUT",
-            expanded=True,
+            "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
+            expanded=False,
         ):
             bulk_cell_site_text = st.text_area(
-                "PASTE YOUR 3-COLUMN EXCEL LIST HERE",
+                "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
                 placeholder=(
                     "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
                     "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
@@ -4513,75 +5230,6 @@ def render_configurable_kpi_analysis():
 
     compare_date_a = None
     compare_date_b = None
-    average_start_date = None
-    average_end_date = None
-
-    # ------------------------------------------------------------
-    # AVERAGE DATE RANGE — EXPLICIT START / END DATE
-    # ------------------------------------------------------------
-    if date_evaluation_mode == "Average Date Range":
-        if len(available_analysis_dates) < 1:
-            st.warning(
-                "Average Date Range requires at least one available date "
-                "in the current KPI Analysis filter."
-            )
-        else:
-            avg_start_col, avg_end_col = st.columns(
-                2,
-                gap="small",
-            )
-
-            def _average_date_label(value):
-                return pd.Timestamp(value).strftime("%d-%b-%Y")
-
-            avg_date_options = available_analysis_dates
-
-            saved_avg_start = st.session_state.get(
-                "custom_kpi_analysis_avg_start_date"
-            )
-            saved_avg_end = st.session_state.get(
-                "custom_kpi_analysis_avg_end_date"
-            )
-
-            if saved_avg_start not in avg_date_options:
-                saved_avg_start = avg_date_options[0]
-
-            if saved_avg_end not in avg_date_options:
-                saved_avg_end = avg_date_options[-1]
-
-            with avg_start_col:
-                average_start_date = st.selectbox(
-                    "Start Date",
-                    options=avg_date_options,
-                    index=avg_date_options.index(saved_avg_start),
-                    format_func=_average_date_label,
-                    key="custom_kpi_analysis_avg_start_date",
-                )
-
-            with avg_end_col:
-                average_end_date = st.selectbox(
-                    "End Date",
-                    options=avg_date_options,
-                    index=avg_date_options.index(saved_avg_end),
-                    format_func=_average_date_label,
-                    key="custom_kpi_analysis_avg_end_date",
-                )
-
-            average_start_date, average_end_date = sorted(
-                [average_start_date, average_end_date]
-            )
-
-            avg_day_count = (
-                pd.Timestamp(average_end_date)
-                - pd.Timestamp(average_start_date)
-            ).days + 1
-
-            st.caption(
-                f"📅 Average Date Range: "
-                f"**{pd.Timestamp(average_start_date):%d-%b-%Y} → "
-                f"{pd.Timestamp(average_end_date):%d-%b-%Y}** "
-                f"({avg_day_count} day(s))"
-            )
 
     if date_evaluation_mode == "Compare 2 Dates":
         if len(available_analysis_dates) < 1:
@@ -6130,19 +6778,8 @@ def render_configurable_kpi_analysis():
         # --------------------------------------------------------
         elif date_evaluation_mode == "Average Date Range":
 
-            average_source = valid_summary_source[
-                (
-                    valid_summary_source["_Summary_Date"]
-                    >= pd.Timestamp(average_start_date)
-                )
-                & (
-                    valid_summary_source["_Summary_Date"]
-                    <= pd.Timestamp(average_end_date)
-                )
-            ].copy()
-
             summary_df = (
-                average_source
+                valid_summary_source
                 .groupby(
                     identity_cols,
                     as_index=False,
@@ -6531,6 +7168,9 @@ if chart_layout == "KPI Analysis":
     render_configurable_kpi_analysis()
     render_kpi_analysis()
 
+if chart_layout == "KPI Status Transition":
+    render_kpi_status_transition()
+
 
 # ============================================================
 # SITE LEVEL SUMMARY — NON-KPI ANALYSIS LAYOUTS ONLY
@@ -6789,7 +7429,10 @@ def render_site_level_summary():
 
 
 # Site Level Summary is intentionally hidden in KPI Analysis.
-if chart_layout != "KPI Analysis":
+if chart_layout not in {
+    "KPI Analysis",
+    "KPI Status Transition",
+}:
     render_site_level_summary()
 
 # ============================================================
