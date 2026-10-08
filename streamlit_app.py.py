@@ -3848,13 +3848,20 @@ def render_kpi_status_transition():
                 "Not Meet Cells — Action Required",
                 ascending=False,
             )
+            .reset_index(drop=True)
+        )
+        action_summary.insert(
+            0,
+            "No",
+            range(1, len(action_summary) + 1),
         )
 
         st.markdown("#### 🎯 KPI Action Summary")
         st.caption(
             "Only KPI results that are **Not Meet on After** are shown. "
             "These are the KPI/Cell combinations to prioritize for "
-            "optimization and action."
+            "optimization and action. "
+            f"Total Not Meet KPI/Cell records: **{len(display_df):,}**."
         )
         st.dataframe(
             action_summary,
@@ -3948,6 +3955,19 @@ def render_kpi_status_transition():
     if final_display.empty:
         st.info("No records match the selected transition.")
     else:
+        # Number every row so the user can immediately verify the exact
+        # number of Cell/KPI records shown in the table.
+        final_display = final_display.reset_index(drop=True)
+        final_display.insert(
+            0,
+            "No",
+            range(1, len(final_display) + 1),
+        )
+
+        st.caption(
+            f"📌 **Total records in table: {len(final_display):,}**"
+        )
+
         st.dataframe(
             final_display,
             use_container_width=True,
