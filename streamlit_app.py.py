@@ -3362,7 +3362,7 @@ def render_kpi_status_transition():
         return
 
     # ------------------------------------------------------------
-    # Date A / Date B
+    # Before / After
     # ------------------------------------------------------------
     available_dates = sorted(
         pd.to_datetime(
@@ -3385,7 +3385,7 @@ def render_kpi_status_transition():
 
     with date_a_col:
         transition_date_a = st.selectbox(
-            "Date A — Before",
+            "Before Date",
             available_dates,
             index=(
                 available_dates.index(
@@ -3407,7 +3407,7 @@ def render_kpi_status_transition():
 
     with date_b_col:
         transition_date_b = st.selectbox(
-            "Date B — After",
+            "After Date",
             available_dates,
             index=(
                 available_dates.index(
@@ -3428,7 +3428,7 @@ def render_kpi_status_transition():
         )
 
     if transition_date_a == transition_date_b:
-        st.warning("Date A and Date B are the same. Select two different dates.")
+        st.warning("Before and After are the same. Select two different dates.")
         return
 
     # ------------------------------------------------------------
@@ -3454,7 +3454,7 @@ def render_kpi_status_transition():
         available_kpis,
         default=transition_defaults,
         key="kpi_status_transition_kpis",
-        help="Select the KPIs whose status should be compared between Date A and Date B.",
+        help="Select the KPIs whose status should be compared between Before and After.",
     )
 
     if not transition_kpis:
@@ -3468,6 +3468,10 @@ def render_kpi_status_transition():
     st.caption(
         "Set the target for each KPI. Higher is Better means value >= target "
         "is Meet; Lower is Better means value <= target is Meet."
+    )
+    st.info(
+        "RANK2 Rate rule: Target = 20 → 19 is Not Meet, "
+        "20 is Meet, and 21 is Meet."
     )
 
     direction_defaults = {}
@@ -3490,6 +3494,11 @@ def render_kpi_status_transition():
         ):
             direction_defaults[kpi_name] = "Lower is Better"
         else:
+            direction_defaults[kpi_name] = "Higher is Better"
+
+        # RANK2 Rate: user-defined KPI rule is higher value = better.
+        # Target 20 means 19 = Not Meet, 20 = Meet, 21 = Meet.
+        if upper == "RANK2 RATE":
             direction_defaults[kpi_name] = "Higher is Better"
 
         if any(
@@ -3533,7 +3542,7 @@ def render_kpi_status_transition():
                     if direction_defaults[kpi_name] == "Higher is Better"
                     else 1
                 ),
-                key=f"kpi_transition_direction_{idx}_{kpi_name}",
+                key=f"kpi_transition_direction_v27_{idx}_{kpi_name}",
             )
 
         target_rows.append(
@@ -3547,7 +3556,7 @@ def render_kpi_status_transition():
     target_df = pd.DataFrame(target_rows)
 
     # ------------------------------------------------------------
-    # Build Date A / Date B values per exact Cell + Site + FreqBand.
+    # Build Before / After values per exact Cell + Site + FreqBand.
     # ------------------------------------------------------------
     identity_cols = [
         "_Cell_Display",
@@ -3604,13 +3613,13 @@ def render_kpi_status_transition():
         date_a_df = daily_values[
             daily_values["_Transition_Date"] == transition_date_a
         ].rename(
-            columns={"_KPI_Value": "Date A"}
+            columns={"_KPI_Value": "Before"}
         )
 
         date_b_df = daily_values[
             daily_values["_Transition_Date"] == transition_date_b
         ].rename(
-            columns={"_KPI_Value": "Date B"}
+            columns={"_KPI_Value": "After"}
         )
 
         merge_keys = [
@@ -3622,10 +3631,10 @@ def render_kpi_status_transition():
             continue
 
         merged = date_a_df[
-            merge_keys + ["Date A"]
+            merge_keys + ["Before"]
         ].merge(
             date_b_df[
-                merge_keys + ["Date B"]
+                merge_keys + ["After"]
             ],
             on=merge_keys,
             how="outer",
@@ -3641,24 +3650,24 @@ def render_kpi_status_transition():
         direction = target_row["Direction"]
 
         if direction == "Higher is Better":
-            merged["Status A"] = merged["Date A"].ge(target_value).map(
+            merged["Status Afterefore"] = merged["Before"].ge(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
-            merged["Status B"] = merged["Date B"].ge(target_value).map(
+            merged["Status After"] = merged["After"].ge(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
         else:
-            merged["Status A"] = merged["Date A"].le(target_value).map(
+            merged["Status Afterefore"] = merged["Before"].le(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
-            merged["Status B"] = merged["Date B"].le(target_value).map(
+            merged["Status After"] = merged["After"].le(target_value).map(
                 {True: "Meet", False: "Not Meet"}
             )
 
         merged["Transition"] = (
-            merged["Status A"].fillna("No Data")
+            merged["Status Afterefore"].fillna("No Data")
             + " → "
-            + merged["Status B"].fillna("No Data")
+            + merged["Status After"].fillna("No Data")
         )
 
         merged["Target"] = target_value
@@ -3693,14 +3702,14 @@ def render_kpi_status_transition():
         key="kpi_status_transition_filter",
         help=(
             "Action-oriented view: show every Cell + KPI that is "
-            "Not Meet on Date B (After date). This includes both "
+            "Not Meet on After (After date). This includes both "
             "Not Meet → Not Meet and Meet → Not Meet."
         ),
     )
 
     if transition_filter == "Not Meet Only":
         display_df = transition_result[
-            transition_result["Status B"].eq("Not Meet")
+            transition_result["Status After"].eq("Not Meet")
         ].copy()
     elif transition_filter == "No Data":
         display_df = transition_result[
@@ -3771,7 +3780,7 @@ def render_kpi_status_transition():
 
         st.markdown("#### 🎯 KPI Action Summary")
         st.caption(
-            "Only KPI results that are **Not Meet on Date B** are shown. "
+            "Only KPI results that are **Not Meet on After** are shown. "
             "These are the KPI/Cell combinations to prioritize for "
             "optimization and action."
         )
@@ -3810,7 +3819,7 @@ def render_kpi_status_transition():
     if transition_filter == "Not Meet Only":
         st.info(
             "🎯 **Action List:** only KPI results that are **Not Meet on "
-            "Date B** are included. These are the Cell/KPI combinations "
+            "After** are included. These are the Cell/KPI combinations "
             "to prioritize for optimization."
         )
 
@@ -3822,7 +3831,232 @@ def render_kpi_status_transition():
         st.info(
             "No records match the selected transition."
         )
-        return
+    
+    # ------------------------------------------------------------
+    # TREND CHARTS — CURRENT NOT MEET ACTION CELLS
+    # ------------------------------------------------------------
+    if transition_filter == "Not Meet Only" and not display_df.empty:
+        st.markdown("#### 📈 Not Meet KPI Trend — Cell Name")
+
+        st.caption(
+            "Each chart shows the historical trend for the KPI/Cell "
+            "combinations that are **Not Meet on the After Date**. "
+            "Cell Name is shown in the legend below the chart."
+        )
+
+        action_pairs = (
+            display_df[
+                [
+                    "_Cell_Display",
+                    "_Site_ID_Search",
+                    "_FreqBand",
+                    "KPI",
+                ]
+            ]
+            .drop_duplicates()
+        )
+
+        for kpi_name in sorted(action_pairs["KPI"].dropna().unique()):
+            kpi_pairs = action_pairs[
+                action_pairs["KPI"].eq(kpi_name)
+            ].copy()
+
+            actual_col = kpi_actual_columns.get(kpi_name)
+            if not actual_col or actual_col not in source_df.columns:
+                continue
+
+            trend_parts = []
+
+            for _, target in kpi_pairs.iterrows():
+                target_mask = (
+                    source_df["_Cell_Display"]
+                    .astype(str)
+                    .str.strip()
+                    .eq(str(target["_Cell_Display"]).strip())
+                    & source_df["_Site_ID_Search"]
+                    .astype(str)
+                    .str.strip()
+                    .eq(str(target["_Site_ID_Search"]).strip())
+                    & source_df["_FreqBand"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .eq(str(target["_FreqBand"]).strip().upper())
+                )
+
+                history = source_df.loc[
+                    target_mask,
+                    [
+                        "_Date",
+                        "_Cell_Display",
+                        "_Site_ID_Search",
+                        actual_col,
+                    ],
+                ].copy()
+
+                if history.empty:
+                    continue
+
+                history["Value"] = pd.to_numeric(
+                    history[actual_col],
+                    errors="coerce",
+                )
+                history = history.dropna(
+                    subset=["_Date", "Value"]
+                )
+
+                if history.empty:
+                    continue
+
+                history["Cell Name"] = (
+                    history["_Cell_Display"].astype(str)
+                )
+
+                # Keep Site ID available internally to distinguish duplicate
+                # Cell Names if the same Cell Name exists at multiple sites.
+                history["Legend"] = (
+                    history["_Cell_Display"].astype(str)
+                    + " | "
+                    + history["_Site_ID_Search"].astype(str)
+                )
+
+                trend_parts.append(
+                    history[
+                        [
+                            "_Date",
+                            "Cell Name",
+                            "Legend",
+                            "Value",
+                        ]
+                    ]
+                )
+
+            if not trend_parts:
+                continue
+
+            trend_df = pd.concat(
+                trend_parts,
+                ignore_index=True,
+            )
+
+            trend_df["_Date"] = pd.to_datetime(
+                trend_df["_Date"],
+                errors="coerce",
+            )
+            trend_df = trend_df.dropna(subset=["_Date"])
+
+            if trend_df.empty:
+                continue
+
+            fig_trend = go.Figure()
+
+            for legend_name, cell_history in trend_df.groupby(
+                "Legend",
+                sort=True,
+            ):
+                cell_history = cell_history.sort_values("_Date")
+
+                # Show Cell Name in the legend. If duplicate Cell Names
+                # exist across sites, append the Site ID for uniqueness.
+                legend_cell = str(
+                    cell_history["Cell Name"].iloc[0]
+                )
+
+                unique_sites = cell_history["Legend"].unique()
+                if len(unique_sites) > 1:
+                    legend_cell = legend_name
+
+                fig_trend.add_trace(
+                    go.Scatter(
+                        x=cell_history["_Date"],
+                        y=cell_history["Value"],
+                        mode="lines+markers",
+                        name=legend_cell,
+                        connectgaps=True,
+                        marker=dict(size=4),
+                    )
+                )
+
+            # Get target/direction from the selected transition KPI.
+            target_match = target_df[
+                target_df["KPI"].eq(kpi_name)
+            ]
+
+            target_value = None
+            direction_value = None
+
+            if not target_match.empty:
+                target_value = float(
+                    target_match["Target"].iloc[0]
+                )
+                direction_value = target_match["Direction"].iloc[0]
+
+                fig_trend.add_trace(
+                    go.Scatter(
+                        x=[
+                            trend_df["_Date"].min(),
+                            trend_df["_Date"].max(),
+                        ],
+                        y=[target_value, target_value],
+                        mode="lines",
+                        name=f"Target ({target_value:g})",
+                        line=dict(
+                            dash="dash",
+                            width=2,
+                        ),
+                    )
+                )
+
+            fig_trend.update_layout(
+                title=f"{kpi_name} — Current Not Meet Cells",
+                height=max(
+                    500,
+                    420 + (
+                        max(
+                            1,
+                            len(fig_trend.data) - (
+                                1 if target_value is not None else 0
+                            ),
+                        )
+                        // 3
+                    ) * 35,
+                ),
+                template="plotly_white",
+                margin=dict(
+                    l=55,
+                    r=30,
+                    t=60,
+                    b=120,
+                ),
+                hovermode="x unified",
+                xaxis=dict(
+                    title="Date",
+                    tickformat="%d-%b-%y",
+                    showgrid=True,
+                ),
+                yaxis=dict(
+                    title=kpi_name,
+                    showgrid=True,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.22,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+
+            show_chart(fig_trend)
+
+            if target_value is not None:
+                st.caption(
+                    f"Target = {target_value:g} | "
+                    f"Direction = {direction_value} | "
+                    f"Lines = Cell Name"
+                )
+
+    return
 
     display_cols = [
         col for col in [
@@ -3831,10 +4065,10 @@ def render_kpi_status_transition():
             "_FreqBand",
             "_Sector_Display",
             "KPI",
-            "Date A",
-            "Status A",
-            "Date B",
-            "Status B",
+            "Before",
+            "Status Afterefore",
+            "After",
+            "Status After",
             "Target",
             "Direction",
             "Transition",
