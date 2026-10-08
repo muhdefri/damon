@@ -3719,10 +3719,13 @@ def render_configurable_kpi_analysis():
         ].copy()
 
         # Exact Cell + Site + FreqBand filter.
-        if (
-            analysis_scope == "Cell Level"
-            and analysis_cell_site_pairs
-        ):
+        #
+        # IMPORTANT:
+        # When a Bulk list is supplied, it is the SOURCE OF TRUTH.
+        # Do not let Analysis Level (Site/Cell), manual Site selection,
+        # stale Streamlit session state, or FreqBand selectors expand
+        # the dataset beyond the exact triples pasted by the user.
+        if analysis_cell_site_pairs:
             pair_mask = pd.Series(
                 False,
                 index=site_filtered_source.index,
@@ -3776,6 +3779,11 @@ def render_configurable_kpi_analysis():
             site_filtered_source = site_filtered_source[
                 pair_mask
             ].copy()
+
+            # Hard guard: Bulk mode must contain ONLY exact pasted
+            # Cell + Site/eNodeB + FreqBand combinations.
+            if not site_filtered_source.empty:
+                site_filtered_source["_Bulk_Exact_Target"] = True
 
     else:
         site_filtered_source = analysis_source[
@@ -3971,9 +3979,13 @@ def render_configurable_kpi_analysis():
                 help="Cell filtering is disabled in Site Level analysis.",
             )
 
-    # Site Level = all cells belonging to the selected site(s).
-    # Cell Level = only the selected Cell Names.
-    # FreqBand filtering applies to both scopes.
+    # IMPORTANT BULK MODE:
+    # If an exact Bulk Cell + Site + FreqBand list was supplied,
+    # site_filtered_source is already the exact target dataset.
+    # Keep it as the source of truth. Manual Cell/FreqBand selectors
+    # may only narrow the result; they must never expand it.
+    #
+    # Without Bulk mode, retain the normal manual filtering workflow.
     analysis_df = site_filtered_source.copy()
 
     if analysis_bands_raw:
@@ -5502,6 +5514,13 @@ def render_configurable_kpi_analysis():
 
                 st.markdown("### 📋 KPI Result Summary")
 
+                if analysis_cell_site_pairs:
+                    st.caption(
+                        f"Bulk exact-match mode: "
+                        f"{len(analysis_cell_site_pairs):,} Cell + Site + FreqBand target(s). "
+                        "Summary is calculated only from these exact targets."
+                    )
+
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Meet", f"{meet_count:,}")
                 m2.metric("Not Meet", f"{not_meet_count:,}")
@@ -5622,6 +5641,13 @@ def render_configurable_kpi_analysis():
                 total_count = len(summary_df)
 
                 st.markdown("### 📋 KPI Result Summary")
+
+                if analysis_cell_site_pairs:
+                    st.caption(
+                        f"Bulk exact-match mode: "
+                        f"{len(analysis_cell_site_pairs):,} Cell + Site + FreqBand target(s). "
+                        "Summary is calculated only from these exact targets."
+                    )
 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Meet", f"{meet_count:,}")
