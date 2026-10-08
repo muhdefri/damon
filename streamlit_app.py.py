@@ -3112,7 +3112,12 @@ def render_kpi_analysis():
     # This is intentionally separate from the normal Site Level workflow.
     # KPI Analysis is an RNO diagnostic view: each requested Cell Name
     # must remain independently traceable in the trend chart and summary.
-    force_bulk_cell_level = bool(analysis_cell_site_pairs)
+    # IMPORTANT:
+    # Use global_bulk_pairs here. It is parsed before this renderer is
+    # called and therefore always exists. analysis_cell_site_pairs is
+    # created later inside this function, so referencing it here caused
+    # the NameError shown by Streamlit.
+    force_bulk_cell_level = bool(global_bulk_pairs)
     effective_cell_level = (
         analysis_scope == "Cell Level"
         or force_bulk_cell_level
