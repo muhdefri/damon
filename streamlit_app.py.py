@@ -3602,300 +3602,299 @@ def render_configurable_kpi_analysis():
     analysis_cell_site_pairs = []
     analysis_bulk_bands = []
 
-    if analysis_search_mode == "Site ID":
-        with st.expander(
-            "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
-            expanded=False,
-        ):
-            bulk_cell_site_text = st.text_area(
-                "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
-                placeholder=(
-                    "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
-                    "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
-                    "JB4G85_4264237E85_133\\t850\\tSUM-JA-MBN-0779"
-                ),
-                height=150,
-                key="custom_kpi_analysis_bulk_cell_site_list",
-                help=(
-                    "Paste 3 columns from Excel in ANY order: "
-                    "Cell Name, Site ID/eNodeB Name, and FreqBand."
-                ),
-            )
+    with st.expander(
+        "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
+        expanded=False,
+    ):
+        bulk_cell_site_text = st.text_area(
+            "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
+            placeholder=(
+                "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
+                "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
+                "JB4G85_4264237E85_133\\t850\\tSUM-JA-MBN-0779"
+            ),
+            height=150,
+            key="custom_kpi_analysis_bulk_cell_site_list",
+            help=(
+                "Paste 3 columns from Excel in ANY order: "
+                "Cell Name, Site ID/eNodeB Name, and FreqBand."
+            ),
+        )
 
-            available_cells = set(
-                analysis_source["_Cell_Display"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .unique()
-            )
+        available_cells = set(
+            analysis_source["_Cell_Display"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .unique()
+        )
 
-            available_sites = set(
-                analysis_source["_Site_ID_Search"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .unique()
-            )
+        available_sites = set(
+            analysis_source["_Site_ID_Search"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .unique()
+        )
 
-            available_enodebs = set(
-                analysis_source["_eNodeB_Search"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .unique()
-            )
+        available_enodebs = set(
+            analysis_source["_eNodeB_Search"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .unique()
+        )
 
-            available_raw_bands = set(
-                analysis_source["_FreqBand"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .unique()
-            )
+        available_raw_bands = set(
+            analysis_source["_FreqBand"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .unique()
+        )
 
-            def _normalize_bulk_band(value):
-                value = str(value).strip().upper()
-                if value.startswith("L"):
-                    value = value[1:]
-                return value
+        def _normalize_bulk_band(value):
+            value = str(value).strip().upper()
+            if value.startswith("L"):
+                value = value[1:]
+            return value
 
-            available_band_normalized = {
-                _normalize_bulk_band(band)
-                for band in available_raw_bands
-            }
+        available_band_normalized = {
+            _normalize_bulk_band(band)
+            for band in available_raw_bands
+        }
 
-            if bulk_cell_site_text.strip():
+        if bulk_cell_site_text.strip():
 
-                for raw_line in bulk_cell_site_text.splitlines():
+            for raw_line in bulk_cell_site_text.splitlines():
 
-                    line = raw_line.strip()
+                line = raw_line.strip()
 
-                    if not line:
-                        continue
+                if not line:
+                    continue
 
-                    normalized_line = line.lower()
-                    if (
-                        "cell name" in normalized_line
-                        and (
-                            "site id" in normalized_line
-                            or "towerid" in normalized_line
-                            or "enodeb" in normalized_line
-                        )
-                    ):
-                        continue
+                normalized_line = line.lower()
+                if (
+                    "cell name" in normalized_line
+                    and (
+                        "site id" in normalized_line
+                        or "towerid" in normalized_line
+                        or "enodeb" in normalized_line
+                    )
+                ):
+                    continue
 
-                    # Excel copy normally uses TAB. Also support
-                    # pipe, semicolon, comma and multiple spaces.
+                # Excel copy normally uses TAB. Also support
+                # pipe, semicolon, comma and multiple spaces.
+                fields = [
+                    field.strip()
+                    for field in re.split(
+                        r"\t|\||;",
+                        line,
+                    )
+                    if field.strip()
+                ]
+
+                if len(fields) < 3:
                     fields = [
                         field.strip()
                         for field in re.split(
-                            r"\t|\||;",
+                            r",",
                             line,
                         )
                         if field.strip()
                     ]
 
-                    if len(fields) < 3:
-                        fields = [
-                            field.strip()
-                            for field in re.split(
-                                r",",
-                                line,
-                            )
-                            if field.strip()
-                        ]
-
-                    if len(fields) < 3:
-                        fields = [
-                            field.strip()
-                            for field in re.split(
-                                r"\s{2,}",
-                                line,
-                            )
-                            if field.strip()
-                        ]
-
-                    if len(fields) < 3:
-                        continue
-
-                    cell_value = None
-                    site_value = None
-                    band_value = None
-
-                    # Identify Cell Name by exact match.
-                    for field in fields:
-                        field_upper = field.upper().strip()
-                        if field_upper in available_cells:
-                            cell_value = field_upper
-                            break
-
-                    # Identify Site ID or full eNodeB Name.
-                    for field in fields:
-                        field_upper = field.upper().strip()
-
-                        sum_match = re.search(
-                            r"(SUM-[A-Z0-9]+(?:-[A-Z0-9]+)*)",
-                            field_upper,
+                if len(fields) < 3:
+                    fields = [
+                        field.strip()
+                        for field in re.split(
+                            r"\s{2,}",
+                            line,
                         )
+                        if field.strip()
+                    ]
 
-                        if sum_match:
-                            site_value = sum_match.group(1)
-                            break
+                if len(fields) < 3:
+                    continue
 
-                        if field_upper in available_enodebs:
-                            site_value = field_upper
-                            break
+                cell_value = None
+                site_value = None
+                band_value = None
 
-                        if field_upper in available_sites:
-                            site_value = field_upper
-                            break
+                # Identify Cell Name by exact match.
+                for field in fields:
+                    field_upper = field.upper().strip()
+                    if field_upper in available_cells:
+                        cell_value = field_upper
+                        break
 
-                    # Identify FreqBand by exact normalized band.
-                    for field in fields:
-                        field_upper = field.upper().strip()
-                        normalized_band = _normalize_bulk_band(field_upper)
+                # Identify Site ID or full eNodeB Name.
+                for field in fields:
+                    field_upper = field.upper().strip()
 
-                        if (
-                            normalized_band in
-                            available_band_normalized
-                        ):
-                            band_value = normalized_band
-                            break
+                    sum_match = re.search(
+                        r"(SUM-[A-Z0-9]+(?:-[A-Z0-9]+)*)",
+                        field_upper,
+                    )
+
+                    if sum_match:
+                        site_value = sum_match.group(1)
+                        break
+
+                    if field_upper in available_enodebs:
+                        site_value = field_upper
+                        break
+
+                    if field_upper in available_sites:
+                        site_value = field_upper
+                        break
+
+                # Identify FreqBand by exact normalized band.
+                for field in fields:
+                    field_upper = field.upper().strip()
+                    normalized_band = _normalize_bulk_band(field_upper)
 
                     if (
-                        cell_value
-                        and site_value
-                        and band_value
+                        normalized_band in
+                        available_band_normalized
                     ):
-                        analysis_cell_site_pairs.append(
-                            (
-                                cell_value,
-                                site_value,
-                                band_value,
-                            )
-                        )
+                        band_value = normalized_band
+                        break
 
-                # Preserve Excel order and remove duplicate rows.
-                analysis_cell_site_pairs = list(
-                    dict.fromkeys(
-                        analysis_cell_site_pairs
+                if (
+                    cell_value
+                    and site_value
+                    and band_value
+                ):
+                    analysis_cell_site_pairs.append(
+                        (
+                            cell_value,
+                            site_value,
+                            band_value,
+                        )
                     )
+
+            # Preserve Excel order and remove duplicate rows.
+            analysis_cell_site_pairs = list(
+                dict.fromkeys(
+                    analysis_cell_site_pairs
                 )
+            )
 
-                valid_pairs = []
-                invalid_pairs = []
+            valid_pairs = []
+            invalid_pairs = []
 
-                for (
-                    cell_value,
-                    site_value,
-                    band_value,
-                ) in analysis_cell_site_pairs:
+            for (
+                cell_value,
+                site_value,
+                band_value,
+            ) in analysis_cell_site_pairs:
 
-                    if site_value.startswith("SUM-"):
-                        pair_mask = (
-                            analysis_source["_Cell_Display"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(cell_value)
-                            & analysis_source["_Site_ID_Search"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(site_value)
-                            & analysis_source["_FreqBand"]
-                            .astype(str)
-                            .str.upper()
-                            .map(_normalize_bulk_band)
-                            .eq(band_value)
-                        )
-                    else:
-                        pair_mask = (
-                            analysis_source["_Cell_Display"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(cell_value)
-                            & analysis_source["_eNodeB_Search"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(site_value)
-                            & analysis_source["_FreqBand"]
-                            .astype(str)
-                            .str.upper()
-                            .map(_normalize_bulk_band)
-                            .eq(band_value)
-                        )
-
-                    if pair_mask.any():
-                        valid_pairs.append(
-                            (
-                                cell_value,
-                                site_value,
-                                band_value,
-                            )
-                        )
-                    else:
-                        invalid_pairs.append(
-                            (
-                                cell_value,
-                                site_value,
-                                band_value,
-                            )
-                        )
-
-                analysis_cell_site_pairs = valid_pairs
-
-                analysis_sites_bulk = list(
-                    dict.fromkeys(
-                        site_value
-                        for _, site_value, _
-                        in analysis_cell_site_pairs
+                if site_value.startswith("SUM-"):
+                    pair_mask = (
+                        analysis_source["_Cell_Display"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(cell_value)
+                        & analysis_source["_Site_ID_Search"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(site_value)
+                        & analysis_source["_FreqBand"]
+                        .astype(str)
+                        .str.upper()
+                        .map(_normalize_bulk_band)
+                        .eq(band_value)
                     )
-                )
-
-                analysis_bulk_bands = list(
-                    dict.fromkeys(
-                        band_value
-                        for _, _, band_value
-                        in analysis_cell_site_pairs
+                else:
+                    pair_mask = (
+                        analysis_source["_Cell_Display"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(cell_value)
+                        & analysis_source["_eNodeB_Search"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(site_value)
+                        & analysis_source["_FreqBand"]
+                        .astype(str)
+                        .str.upper()
+                        .map(_normalize_bulk_band)
+                        .eq(band_value)
                     )
-                )
 
-                st.caption(
-                    f"Bulk list: "
-                    f"{len(analysis_cell_site_pairs):,} valid target(s)"
-                    + (
-                        f" | {len(invalid_pairs):,} not found."
-                        if invalid_pairs
-                        else "."
-                    )
-                )
-
-                if invalid_pairs:
-                    with st.expander(
-                        f"View {len(invalid_pairs):,} target(s) not found",
-                        expanded=False,
-                    ):
-                        st.dataframe(
-                            pd.DataFrame(
-                                invalid_pairs,
-                                columns=[
-                                    "Cell Name",
-                                    "Site / eNodeB",
-                                    "FreqBand",
-                                ],
-                            ),
-                            use_container_width=True,
-                            hide_index=True,
+                if pair_mask.any():
+                    valid_pairs.append(
+                        (
+                            cell_value,
+                            site_value,
+                            band_value,
                         )
+                    )
+                else:
+                    invalid_pairs.append(
+                        (
+                            cell_value,
+                            site_value,
+                            band_value,
+                        )
+                    )
+
+            analysis_cell_site_pairs = valid_pairs
+
+            analysis_sites_bulk = list(
+                dict.fromkeys(
+                    site_value
+                    for _, site_value, _
+                    in analysis_cell_site_pairs
+                )
+            )
+
+            analysis_bulk_bands = list(
+                dict.fromkeys(
+                    band_value
+                    for _, _, band_value
+                    in analysis_cell_site_pairs
+                )
+            )
+
+            st.caption(
+                f"Bulk list: "
+                f"{len(analysis_cell_site_pairs):,} valid target(s)"
+                + (
+                    f" | {len(invalid_pairs):,} not found."
+                    if invalid_pairs
+                    else "."
+                )
+            )
+
+            if invalid_pairs:
+                with st.expander(
+                    f"View {len(invalid_pairs):,} target(s) not found",
+                    expanded=False,
+                ):
+                    st.dataframe(
+                        pd.DataFrame(
+                            invalid_pairs,
+                            columns=[
+                                "Cell Name",
+                                "Site / eNodeB",
+                                "FreqBand",
+                            ],
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
     # ------------------------------------------------------------
     # Combine manual Site selection + bulk Site values.
     # ------------------------------------------------------------
-    if analysis_search_mode == "Site ID":
+    if analysis_search_mode == "Site ID" or analysis_cell_site_pairs:
         analysis_sites = list(
             dict.fromkeys(
                 analysis_sites_manual
@@ -3908,7 +3907,7 @@ def render_configurable_kpi_analysis():
     else:
         analysis_sites = analysis_sites_manual
 
-    if analysis_search_mode == "Site ID":
+    if analysis_search_mode == "Site ID" or analysis_cell_site_pairs:
 
         sum_bulk_sites = [
             value
