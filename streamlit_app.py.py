@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 st.title("📡 RAN KPI Dashboard")
-st.caption("Test version — CSV only")
+st.caption("Test version — CSV / CSV.GZ")
 
 
 # ============================================================
@@ -1024,22 +1024,47 @@ def apply_internal_mapping(df, localcell_col):
 st.sidebar.header("Upload")
 
 uploaded_csv = st.sidebar.file_uploader(
-    "Upload KPI CSV",
-    type=["csv"],
-    help="Test version: CSV only.",
+    "Upload KPI CSV / CSV.GZ",
+    type=["csv", "gz"],
+    help="Supported formats: .csv and .csv.gz",
 )
 
 if uploaded_csv is None:
-    st.info("Upload your KPI CSV from the sidebar.")
+    st.info("Upload your KPI CSV or CSV.GZ from the sidebar.")
+    st.stop()
+
+# ------------------------------------------------------------
+# File format detection
+# ------------------------------------------------------------
+# CSV.GZ is read directly from memory; no manual extraction is needed.
+# We validate the extension so a generic .gz file is not accepted
+# accidentally.
+uploaded_name = uploaded_csv.name.lower()
+
+if uploaded_name.endswith(".csv.gz"):
+    input_compression = "gzip"
+elif uploaded_name.endswith(".csv"):
+    input_compression = None
+else:
+    st.error(
+        "Unsupported file format. Please upload a .csv or .csv.gz file."
+    )
     st.stop()
 
 
 @st.cache_data(show_spinner=False)
-def get_csv_headers(file_bytes):
+def get_csv_headers(file_bytes, compression):
     """Read only the CSV header once and cache it."""
+    read_kwargs = {
+        "nrows": 0,
+    }
+
+    if compression is not None:
+        read_kwargs["compression"] = compression
+
     header_df = pd.read_csv(
         io.BytesIO(file_bytes),
-        nrows=0,
+        **read_kwargs,
     )
     return tuple(
         str(column).strip()
@@ -1056,6 +1081,7 @@ def load_and_prepare_csv(
     localcell_column,
     date_column,
     time_column=None,
+    compression=None,
 ):
     """
     Read only columns used by the dashboard, then perform the
@@ -1064,10 +1090,17 @@ def load_and_prepare_csv(
     Streamlit caches this result, so sidebar changes do not force
     the CSV parsing and mapping work to run again.
     """
+    read_kwargs = {
+        "usecols": list(usecols),
+        "low_memory": False,
+    }
+
+    if compression is not None:
+        read_kwargs["compression"] = compression
+
     frame = pd.read_csv(
         io.BytesIO(file_bytes),
-        usecols=list(usecols),
-        low_memory=False,
+        **read_kwargs,
     )
 
     frame.columns = [
@@ -1150,7 +1183,8 @@ file_bytes = uploaded_csv.getvalue()
 with st.spinner("Preparing KPI CSV..."):
 
     csv_headers = get_csv_headers(
-        file_bytes
+        file_bytes,
+        input_compression,
     )
 
     header_frame = pd.DataFrame(
@@ -1287,6 +1321,7 @@ with st.spinner("Preparing KPI CSV..."):
         localcell_col,
         date_col,
         time_col,
+        input_compression,
     )
 
 # ============================================================
@@ -5098,4 +5133,3 @@ if _download_figures:
             mime="application/zip",
             use_container_width=False,
         )
-
