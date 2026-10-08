@@ -3876,8 +3876,25 @@ def render_configurable_kpi_analysis():
         if cell in analysis_cell_values
     ]
 
-    # When the user changes FreqBand and the previous Cell selection
-    # becomes invalid, default to all cells in the newly selected band.
+    # When Bulk Cell + Site pairs are provided, prioritize exactly
+    # those Cell Names. This prevents an old Streamlit session state
+    # from leaving the Cell selector empty.
+    if (
+        analysis_scope == "Cell Level"
+        and analysis_cell_site_pairs
+    ):
+        bulk_pair_cells = [
+            cell
+            for cell, _ in analysis_cell_site_pairs
+            if cell in analysis_cell_values
+        ]
+
+        if bulk_pair_cells:
+            valid_default_cells = list(
+                dict.fromkeys(bulk_pair_cells)
+            )
+
+    # Normal behavior when Bulk Cell + Site is not used.
     if (
         analysis_scope == "Cell Level"
         and not valid_default_cells
@@ -3940,10 +3957,13 @@ def render_configurable_kpi_analysis():
         ].copy()
 
     if analysis_df.empty:
-        st.info("No data available for the selected Analysis filter / FreqBand / Cell Name.")
-        return
-
-    analysis_is_hourly = bool(analysis_df["_Is_Hourly"].any())
+        st.warning(
+            "No KPI data is available for the current Cell/FreqBand filter. "
+            "Please check the Bulk Cell + Site pairs or select a Cell Name."
+        )
+        analysis_is_hourly = False
+    else:
+        analysis_is_hourly = bool(analysis_df["_Is_Hourly"].any())
 
     # Useful RNO-oriented presets.
     preset_map = {
@@ -4007,6 +4027,15 @@ def render_configurable_kpi_analysis():
             default=default_selection,
             key="custom_kpi_analysis_selection",
         )
+
+    # If the filtered dataset is temporarily empty, keep the KPI
+    # selector visible but stop before chart/summary calculations.
+    if analysis_df.empty:
+        st.info(
+            "KPI selector is ready. Select a KPI after confirming "
+            "the Cell/FreqBand filter."
+        )
+        return
 
     # KPI Analysis supports a single KPI as well as multi-KPI analysis.
     # 1 KPI  -> immediately render one diagnostic chart.
