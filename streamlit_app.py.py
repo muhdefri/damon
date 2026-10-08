@@ -3341,7 +3341,7 @@ def render_configurable_kpi_analysis():
         analysis_selector_key = "custom_kpi_analysis_enodeb"
 
     with site_col:
-        analysis_sites = st.multiselect(
+        analysis_sites_manual = st.multiselect(
             analysis_selector_label,
             analysis_selector_values,
             default=default_analysis_selector,
@@ -3356,10 +3356,381 @@ def render_configurable_kpi_analysis():
             ),
         )
 
+    # ------------------------------------------------------------
+    # BULK CELL + SITE LIST
+    # ------------------------------------------------------------
+    # Recommended Excel input:
+    #
+    # Cell Name                         Site ID
+    # JB4G85_426D591E85_133            SUM-JA-MBN-0121
+    # JB4G85_4264512E85_131            SUM-JA-MBN-0125
+    #
+    # The Cell + Site pair is preserved. This is important for
+    # Cell Level analysis: selecting a Site must NOT automatically
+    # include every other Cell under that Site.
+    #
+    # The second column may also be a full eNodeB Name when no
+    # SUM- Site ID exists, for example:
+    #
+    # JB4G85_426D591E85_133    4264587E_LTE_H2_MERSAM_JAMBI#4264587E#MC
+    # ------------------------------------------------------------
+    analysis_sites_bulk = []
+    analysis_cell_site_pairs = []
+
     if analysis_search_mode == "Site ID":
+        with st.expander(
+            "📋 Bulk Cell + Site List — Paste from Excel",
+            expanded=False,
+        ):
+            bulk_cell_site_text = st.text_area(
+                "Paste Cell Name + Site ID / eNodeB Name",
+                placeholder=(
+                    "JB4G85_426D591E85_133\\tSUM-JA-MBN-0121\\n"
+                    "JB4G85_4264512E85_131\\tSUM-JA-MBN-0125\\n"
+                    "JB4G85_4261509E85_133\\tSUM-JA-MBN-0127"
+                ),
+                height=150,
+                key="custom_kpi_analysis_bulk_cell_site_list",
+                help=(
+                    "Copy two columns directly from Excel: "
+                    "Cell Name + Site ID/eNodeB Name."
+                ),
+            )
+
+            available_cells = set(
+                analysis_source["_Cell_Display"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
+
+            available_sites = set(
+                analysis_source["_Site_ID_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
+
+            available_enodebs = set(
+                analysis_source["_eNodeB_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
+
+            if bulk_cell_site_text.strip():
+
+                for raw_line in bulk_cell_site_text.splitlines():
+
+                    line = raw_line.strip()
+
+                    if not line:
+                        continue
+
+                    # Skip common Excel headers.
+                    normalized_line = line.lower()
+                    if (
+                        "cell name" in normalized_line
+                        and (
+                            "site id" in normalized_line
+                            or "towerid" in normalized_line
+                            or "enodeb" in normalized_line
+                        )
+                    ):
+                        continue
+
+                    # Excel copy uses TAB between columns.
+                    # Also support |, ;, and comma for convenience.
+                    fields = [
+                        field.strip()
+                        for field in re.split(
+                            r"\t|\||;",
+                            line,
+                        )
+                        if field.strip()
+                    ]
+
+                    if len(fields) < 2:
+                        fields = [
+                            field.strip()
+                            for field in re.split(
+                                r",",
+                                line,
+                            )
+                            if field.strip()
+                        ]
+
+                    if len(fields) < 2:
+                        fields = [
+                            field.strip()
+                            for field in re.split(
+                                r"\s{2,}",
+                                line,
+                            )
+                            if field.strip()
+                        ]
+
+                    if len(fields) < 2:
+                        continue
+
+                    cell_value = None
+                    site_value = None
+
+                    # Find the exact Cell Name in the uploaded KPI data.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+
+                        if field_upper in available_cells:
+                            cell_value = field_upper
+                            break
+
+                    # Find Site ID or full eNodeB Name.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+
+                        sum_match = re.search(
+                            r"(SUM-[A-Z0-9]+(?:-[A-Z0-9]+)*)",
+                            field_upper,
+                        )
+
+                        if sum_match:
+                            site_value = sum_match.group(1)
+                            break
+
+                        if field_upper in available_enodebs:
+                            site_value = field_upper
+                            break
+
+                        if field_upper in available_sites:
+                            site_value = field_upper
+                            break
+
+                    if cell_value and site_value:
+                        analysis_cell_site_pairs.append(
+                            (cell_value, site_value)
+                        )
+
+                # Remove duplicate pairs while preserving Excel order.
+                analysis_cell_site_pairs = list(
+                    dict.fromkeys(
+                        analysis_cell_site_pairs
+                    )
+                )
+
+                # Only keep valid pairs that actually exist in the KPI data.
+                valid_pairs = []
+                invalid_pairs = []
+
+                for cell_value, site_value in analysis_cell_site_pairs:
+
+                    cell_exists = (
+                        cell_value in available_cells
+                    )
+
+                    if site_value.startswith("SUM-"):
+                        site_exists = (
+                            site_value in available_sites
+                        )
+                    else:
+                        site_exists = (
+                            site_value in available_enodebs
+                        )
+
+                    # For a Cell + Site pair, check the actual
+                    # combination, not only whether each value exists.
+                    if cell_exists and site_exists:
+
+                        if site_value.startswith("SUM-"):
+                            pair_exists = (
+                                (
+                                    analysis_source["_Cell_Display"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .eq(cell_value)
+                                )
+                                & (
+                                    analysis_source["_Site_ID_Search"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .eq(site_value)
+                                )
+                            ).any()
+                        else:
+                            pair_exists = (
+                                (
+                                    analysis_source["_Cell_Display"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .eq(cell_value)
+                                )
+                                & (
+                                    analysis_source["_eNodeB_Search"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .eq(site_value)
+                                )
+                            ).any()
+
+                        if pair_exists:
+                            valid_pairs.append(
+                                (cell_value, site_value)
+                            )
+                        else:
+                            invalid_pairs.append(
+                                (cell_value, site_value)
+                            )
+                    else:
+                        invalid_pairs.append(
+                            (cell_value, site_value)
+                        )
+
+                analysis_cell_site_pairs = valid_pairs
+
+                # Site values are also retained for the existing
+                # Site/FreqBand filter flow.
+                analysis_sites_bulk = list(
+                    dict.fromkeys(
+                        site_value
+                        for _, site_value
+                        in analysis_cell_site_pairs
+                    )
+                )
+
+                st.caption(
+                    f"Bulk pair list: "
+                    f"{len(analysis_cell_site_pairs):,} valid Cell/Site pair(s)"
+                    + (
+                        f" | {len(invalid_pairs):,} invalid pair(s)."
+                        if invalid_pairs
+                        else "."
+                    )
+                )
+
+                if invalid_pairs:
+                    with st.expander(
+                        f"View {len(invalid_pairs):,} invalid pair(s)",
+                        expanded=False,
+                    ):
+                        st.dataframe(
+                            pd.DataFrame(
+                                invalid_pairs,
+                                columns=[
+                                    "Cell Name",
+                                    "Site / eNodeB",
+                                ],
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+    # ------------------------------------------------------------
+    # Combine manual Site selection + bulk Site values.
+    # ------------------------------------------------------------
+    if analysis_search_mode == "Site ID":
+        analysis_sites = list(
+            dict.fromkeys(
+                analysis_sites_manual
+                + [
+                    site
+                    for site in analysis_sites_bulk
+                ]
+            )
+        )
+    else:
+        analysis_sites = analysis_sites_manual
+
+    if analysis_search_mode == "Site ID":
+
+        # Site-level filter first.
+        sum_bulk_sites = [
+            value
+            for value in analysis_sites
+            if str(value).upper().startswith("SUM-")
+        ]
+
+        enodeb_bulk_sites = [
+            value
+            for value in analysis_sites
+            if not str(value).upper().startswith("SUM-")
+        ]
+
+        site_mask = (
+            analysis_source["_Site_ID_Search"].isin(
+                sum_bulk_sites
+            )
+        )
+
+        if enodeb_bulk_sites:
+            site_mask = (
+                site_mask
+                | analysis_source["_eNodeB_Search"].isin(
+                    enodeb_bulk_sites
+                )
+            )
+
         site_filtered_source = analysis_source[
-            analysis_source["_Site_ID_Search"].isin(analysis_sites)
+            site_mask
         ].copy()
+
+        # --------------------------------------------------------
+        # Cell + Site pair filter.
+        #
+        # Example:
+        #   JB4G85_426D591E85_133 + SUM-JA-MBN-0121
+        #
+        # Only this exact combination is retained.
+        # --------------------------------------------------------
+        if (
+            analysis_scope == "Cell Level"
+            and analysis_cell_site_pairs
+        ):
+            pair_mask = pd.Series(
+                False,
+                index=site_filtered_source.index,
+            )
+
+            for cell_value, site_value in analysis_cell_site_pairs:
+
+                cell_mask = (
+                    site_filtered_source["_Cell_Display"]
+                    .astype(str)
+                    .str.upper()
+                    .eq(cell_value)
+                )
+
+                if site_value.startswith("SUM-"):
+                    site_mask_pair = (
+                        site_filtered_source["_Site_ID_Search"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(site_value)
+                    )
+                else:
+                    site_mask_pair = (
+                        site_filtered_source["_eNodeB_Search"]
+                        .astype(str)
+                        .str.upper()
+                        .eq(site_value)
+                    )
+
+                pair_mask = (
+                    pair_mask
+                    | (
+                        cell_mask
+                        & site_mask_pair
+                    )
+                )
+
+            site_filtered_source = site_filtered_source[
+                pair_mask
+            ].copy()
+
     else:
         site_filtered_source = analysis_source[
             analysis_source["_eNodeB_Search"].isin(analysis_sites)
