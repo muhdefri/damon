@@ -4180,22 +4180,43 @@ def render_kpi_status_transition():
             # Remain Meet, because it is for investigation.
             if len(scope_kpis) >= 1:
                 st.markdown("#### 🔬 KPI Correlation — Selected Cell/Site")
+                st.caption(
+                    "Primary KPI comes from KPIs to Compare. Counter KPI can be "
+                    "any available KPI, so you can correlate RANK2/SSSR/Availability "
+                    "with Average TA, CQI, PRB, Payload, etc."
+                )
 
                 primary_options = scope_kpis
                 primary_kpi = st.selectbox(
                     "Primary KPI",
                     primary_options,
-                    key="selected_scope_primary_kpi_v38",
+                    key="selected_scope_primary_kpi_v41",
                 )
 
-                counter_options = ["None"] + [
-                    k for k in scope_kpis if k != primary_kpi
+                # Counter KPI is independent from the Before/After KPI
+                # selection. It can be ANY KPI available in the dataset.
+                counter_candidates = [
+                    k for k in available_kpis
+                    if k in kpi_actual_columns and k != primary_kpi
                 ]
+
+                counter_options = ["None"] + counter_candidates
+
+                # Keep Average TA as the preferred default when available.
+                counter_default = 0
+                if "Average TA" in counter_candidates:
+                    counter_default = counter_options.index("Average TA")
 
                 counter_kpi = st.selectbox(
                     "Counter KPI",
                     counter_options,
-                    key="selected_scope_counter_kpi_v38",
+                    index=counter_default,
+                    key="selected_scope_counter_kpi_v41",
+                    help=(
+                        "Choose any available KPI to compare with the "
+                        "Primary KPI. It does not need to be selected "
+                        "in KPIs to Compare."
+                    ),
                 )
 
                 primary_history = build_scope_history(
