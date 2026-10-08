@@ -4093,10 +4093,17 @@ def render_kpi_status_transition():
         ]
 
         # Preserve the KPI order selected by the user, when available.
-        selected_compare_kpis = [
-            k for k in selected_kpis_to_compare
-            if k in compare_candidates
-        ]
+        # Use the KPIs that are actually present in the current
+        # KPI Status Transition result. This avoids relying on a
+        # variable from another layout/function.
+        selected_compare_kpis = (
+            [
+                k for k in display_df["KPI"].dropna().unique()
+                if k in compare_candidates
+            ]
+            if not display_df.empty
+            else []
+        )
 
         if not selected_compare_kpis:
             selected_compare_kpis = sorted(compare_candidates)
