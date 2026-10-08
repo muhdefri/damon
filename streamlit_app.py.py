@@ -3602,294 +3602,295 @@ def render_configurable_kpi_analysis():
     analysis_cell_site_pairs = []
     analysis_bulk_bands = []
 
-    with st.expander(
-        "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
-        expanded=True,
-    ):
-        bulk_cell_site_text = st.text_area(
-            "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
-            placeholder=(
-                "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
-                "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
-                "JB4G85_4264237E85_133\\t850\\tSUM-JA-MBN-0779"
-            ),
-            height=150,
-            key="custom_kpi_analysis_bulk_cell_site_list",
-            help=(
-                "Paste 3 columns from Excel in ANY order: "
-                "Cell Name, Site ID/eNodeB Name, and FreqBand."
-            ),
-        )
+    if True:
+        with st.expander(
+            "🎯 KPI ANALYSIS — BULK CELL + SITE + FREQBAND INPUT",
+            expanded=True,
+        ):
+            bulk_cell_site_text = st.text_area(
+                "PASTE YOUR 3-COLUMN EXCEL LIST HERE",
+                placeholder=(
+                    "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
+                    "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
+                    "JB4G85_4264237E85_133\\t850\\tSUM-JA-MBN-0779"
+                ),
+                height=150,
+                key="custom_kpi_analysis_bulk_cell_site_list",
+                help=(
+                    "Paste 3 columns from Excel in ANY order: "
+                    "Cell Name, Site ID/eNodeB Name, and FreqBand."
+                ),
+            )
 
-        available_cells = set(
-            analysis_source["_Cell_Display"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .unique()
-        )
+            available_cells = set(
+                analysis_source["_Cell_Display"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
 
-        available_sites = set(
-            analysis_source["_Site_ID_Search"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .unique()
-        )
+            available_sites = set(
+                analysis_source["_Site_ID_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
 
-        available_enodebs = set(
-            analysis_source["_eNodeB_Search"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .unique()
-        )
+            available_enodebs = set(
+                analysis_source["_eNodeB_Search"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
 
-        available_raw_bands = set(
-            analysis_source["_FreqBand"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .unique()
-        )
+            available_raw_bands = set(
+                analysis_source["_FreqBand"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .unique()
+            )
 
-        def _normalize_bulk_band(value):
-            value = str(value).strip().upper()
-            if value.startswith("L"):
-                value = value[1:]
-            return value
+            def _normalize_bulk_band(value):
+                value = str(value).strip().upper()
+                if value.startswith("L"):
+                    value = value[1:]
+                return value
 
-        available_band_normalized = {
-            _normalize_bulk_band(band)
-            for band in available_raw_bands
-        }
+            available_band_normalized = {
+                _normalize_bulk_band(band)
+                for band in available_raw_bands
+            }
 
-        if bulk_cell_site_text.strip():
+            if bulk_cell_site_text.strip():
 
-            for raw_line in bulk_cell_site_text.splitlines():
+                for raw_line in bulk_cell_site_text.splitlines():
 
-                line = raw_line.strip()
+                    line = raw_line.strip()
 
-                if not line:
-                    continue
+                    if not line:
+                        continue
 
-                normalized_line = line.lower()
-                if (
-                    "cell name" in normalized_line
-                    and (
-                        "site id" in normalized_line
-                        or "towerid" in normalized_line
-                        or "enodeb" in normalized_line
-                    )
-                ):
-                    continue
+                    normalized_line = line.lower()
+                    if (
+                        "cell name" in normalized_line
+                        and (
+                            "site id" in normalized_line
+                            or "towerid" in normalized_line
+                            or "enodeb" in normalized_line
+                        )
+                    ):
+                        continue
 
-                # Excel copy normally uses TAB. Also support
-                # pipe, semicolon, comma and multiple spaces.
-                fields = [
-                    field.strip()
-                    for field in re.split(
-                        r"\t|\||;",
-                        line,
-                    )
-                    if field.strip()
-                ]
-
-                if len(fields) < 3:
+                    # Excel copy normally uses TAB. Also support
+                    # pipe, semicolon, comma and multiple spaces.
                     fields = [
                         field.strip()
                         for field in re.split(
-                            r",",
+                            r"\t|\||;",
                             line,
                         )
                         if field.strip()
                     ]
 
-                if len(fields) < 3:
-                    fields = [
-                        field.strip()
-                        for field in re.split(
-                            r"\s{2,}",
-                            line,
+                    if len(fields) < 3:
+                        fields = [
+                            field.strip()
+                            for field in re.split(
+                                r",",
+                                line,
+                            )
+                            if field.strip()
+                        ]
+
+                    if len(fields) < 3:
+                        fields = [
+                            field.strip()
+                            for field in re.split(
+                                r"\s{2,}",
+                                line,
+                            )
+                            if field.strip()
+                        ]
+
+                    if len(fields) < 3:
+                        continue
+
+                    cell_value = None
+                    site_value = None
+                    band_value = None
+
+                    # Identify Cell Name by exact match.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+                        if field_upper in available_cells:
+                            cell_value = field_upper
+                            break
+
+                    # Identify Site ID or full eNodeB Name.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+
+                        sum_match = re.search(
+                            r"(SUM-[A-Z0-9]+(?:-[A-Z0-9]+)*)",
+                            field_upper,
                         )
-                        if field.strip()
-                    ]
 
-                if len(fields) < 3:
-                    continue
+                        if sum_match:
+                            site_value = sum_match.group(1)
+                            break
 
-                cell_value = None
-                site_value = None
-                band_value = None
+                        if field_upper in available_enodebs:
+                            site_value = field_upper
+                            break
 
-                # Identify Cell Name by exact match.
-                for field in fields:
-                    field_upper = field.upper().strip()
-                    if field_upper in available_cells:
-                        cell_value = field_upper
-                        break
+                        if field_upper in available_sites:
+                            site_value = field_upper
+                            break
 
-                # Identify Site ID or full eNodeB Name.
-                for field in fields:
-                    field_upper = field.upper().strip()
+                    # Identify FreqBand by exact normalized band.
+                    for field in fields:
+                        field_upper = field.upper().strip()
+                        normalized_band = _normalize_bulk_band(field_upper)
 
-                    sum_match = re.search(
-                        r"(SUM-[A-Z0-9]+(?:-[A-Z0-9]+)*)",
-                        field_upper,
-                    )
-
-                    if sum_match:
-                        site_value = sum_match.group(1)
-                        break
-
-                    if field_upper in available_enodebs:
-                        site_value = field_upper
-                        break
-
-                    if field_upper in available_sites:
-                        site_value = field_upper
-                        break
-
-                # Identify FreqBand by exact normalized band.
-                for field in fields:
-                    field_upper = field.upper().strip()
-                    normalized_band = _normalize_bulk_band(field_upper)
+                        if (
+                            normalized_band in
+                            available_band_normalized
+                        ):
+                            band_value = normalized_band
+                            break
 
                     if (
-                        normalized_band in
-                        available_band_normalized
+                        cell_value
+                        and site_value
+                        and band_value
                     ):
-                        band_value = normalized_band
-                        break
-
-                if (
-                    cell_value
-                    and site_value
-                    and band_value
-                ):
-                    analysis_cell_site_pairs.append(
-                        (
-                            cell_value,
-                            site_value,
-                            band_value,
+                        analysis_cell_site_pairs.append(
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
+                            )
                         )
-                    )
 
-            # Preserve Excel order and remove duplicate rows.
-            analysis_cell_site_pairs = list(
-                dict.fromkeys(
-                    analysis_cell_site_pairs
+                # Preserve Excel order and remove duplicate rows.
+                analysis_cell_site_pairs = list(
+                    dict.fromkeys(
+                        analysis_cell_site_pairs
+                    )
                 )
-            )
 
-            valid_pairs = []
-            invalid_pairs = []
+                valid_pairs = []
+                invalid_pairs = []
 
-            for (
-                cell_value,
-                site_value,
-                band_value,
-            ) in analysis_cell_site_pairs:
+                for (
+                    cell_value,
+                    site_value,
+                    band_value,
+                ) in analysis_cell_site_pairs:
 
-                if site_value.startswith("SUM-"):
-                    pair_mask = (
-                        analysis_source["_Cell_Display"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(cell_value)
-                        & analysis_source["_Site_ID_Search"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(site_value)
-                        & analysis_source["_FreqBand"]
-                        .astype(str)
-                        .str.upper()
-                        .map(_normalize_bulk_band)
-                        .eq(band_value)
-                    )
-                else:
-                    pair_mask = (
-                        analysis_source["_Cell_Display"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(cell_value)
-                        & analysis_source["_eNodeB_Search"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(site_value)
-                        & analysis_source["_FreqBand"]
-                        .astype(str)
-                        .str.upper()
-                        .map(_normalize_bulk_band)
-                        .eq(band_value)
-                    )
-
-                if pair_mask.any():
-                    valid_pairs.append(
-                        (
-                            cell_value,
-                            site_value,
-                            band_value,
+                    if site_value.startswith("SUM-"):
+                        pair_mask = (
+                            analysis_source["_Cell_Display"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(cell_value)
+                            & analysis_source["_Site_ID_Search"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(site_value)
+                            & analysis_source["_FreqBand"]
+                            .astype(str)
+                            .str.upper()
+                            .map(_normalize_bulk_band)
+                            .eq(band_value)
                         )
-                    )
-                else:
-                    invalid_pairs.append(
-                        (
-                            cell_value,
-                            site_value,
-                            band_value,
+                    else:
+                        pair_mask = (
+                            analysis_source["_Cell_Display"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(cell_value)
+                            & analysis_source["_eNodeB_Search"]
+                            .astype(str)
+                            .str.upper()
+                            .eq(site_value)
+                            & analysis_source["_FreqBand"]
+                            .astype(str)
+                            .str.upper()
+                            .map(_normalize_bulk_band)
+                            .eq(band_value)
                         )
+
+                    if pair_mask.any():
+                        valid_pairs.append(
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
+                            )
+                        )
+                    else:
+                        invalid_pairs.append(
+                            (
+                                cell_value,
+                                site_value,
+                                band_value,
+                            )
+                        )
+
+                analysis_cell_site_pairs = valid_pairs
+
+                analysis_sites_bulk = list(
+                    dict.fromkeys(
+                        site_value
+                        for _, site_value, _
+                        in analysis_cell_site_pairs
                     )
-
-            analysis_cell_site_pairs = valid_pairs
-
-            analysis_sites_bulk = list(
-                dict.fromkeys(
-                    site_value
-                    for _, site_value, _
-                    in analysis_cell_site_pairs
                 )
-            )
 
-            analysis_bulk_bands = list(
-                dict.fromkeys(
-                    band_value
-                    for _, _, band_value
-                    in analysis_cell_site_pairs
-                )
-            )
-
-            st.caption(
-                f"Bulk list: "
-                f"{len(analysis_cell_site_pairs):,} valid target(s)"
-                + (
-                    f" | {len(invalid_pairs):,} not found."
-                    if invalid_pairs
-                    else "."
-                )
-            )
-
-            if invalid_pairs:
-                with st.expander(
-                    f"View {len(invalid_pairs):,} target(s) not found",
-                    expanded=False,
-                ):
-                    st.dataframe(
-                        pd.DataFrame(
-                            invalid_pairs,
-                            columns=[
-                                "Cell Name",
-                                "Site / eNodeB",
-                                "FreqBand",
-                            ],
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
+                analysis_bulk_bands = list(
+                    dict.fromkeys(
+                        band_value
+                        for _, _, band_value
+                        in analysis_cell_site_pairs
                     )
+                )
+
+                st.caption(
+                    f"Bulk list: "
+                    f"{len(analysis_cell_site_pairs):,} valid target(s)"
+                    + (
+                        f" | {len(invalid_pairs):,} not found."
+                        if invalid_pairs
+                        else "."
+                    )
+                )
+
+                if invalid_pairs:
+                    with st.expander(
+                        f"View {len(invalid_pairs):,} target(s) not found",
+                        expanded=False,
+                    ):
+                        st.dataframe(
+                            pd.DataFrame(
+                                invalid_pairs,
+                                columns=[
+                                    "Cell Name",
+                                    "Site / eNodeB",
+                                    "FreqBand",
+                                ],
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
     # ------------------------------------------------------------
     # Combine manual Site selection + bulk Site values.
@@ -4512,18 +4513,18 @@ def render_configurable_kpi_analysis():
 
     compare_date_a = None
     compare_date_b = None
+    average_start_date = None
+    average_end_date = None
 
-    # ============================================================
-    # AVERAGE DATE RANGE
-    # ============================================================
+    # ------------------------------------------------------------
+    # AVERAGE DATE RANGE — EXPLICIT START / END DATE
+    # ------------------------------------------------------------
     if date_evaluation_mode == "Average Date Range":
-        if not available_analysis_dates:
+        if len(available_analysis_dates) < 1:
             st.warning(
                 "Average Date Range requires at least one available date "
                 "in the current KPI Analysis filter."
             )
-            average_start_date = None
-            average_end_date = None
         else:
             avg_start_col, avg_end_col = st.columns(
                 2,
@@ -4533,53 +4534,53 @@ def render_configurable_kpi_analysis():
             def _average_date_label(value):
                 return pd.Timestamp(value).strftime("%d-%b-%Y")
 
+            avg_date_options = available_analysis_dates
+
             saved_avg_start = st.session_state.get(
-                "custom_kpi_analysis_average_start"
+                "custom_kpi_analysis_avg_start_date"
             )
             saved_avg_end = st.session_state.get(
-                "custom_kpi_analysis_average_end"
+                "custom_kpi_analysis_avg_end_date"
             )
 
-            if saved_avg_start not in available_analysis_dates:
-                saved_avg_start = available_analysis_dates[0]
+            if saved_avg_start not in avg_date_options:
+                saved_avg_start = avg_date_options[0]
 
-            if saved_avg_end not in available_analysis_dates:
-                saved_avg_end = available_analysis_dates[-1]
+            if saved_avg_end not in avg_date_options:
+                saved_avg_end = avg_date_options[-1]
 
             with avg_start_col:
                 average_start_date = st.selectbox(
                     "Start Date",
-                    options=available_analysis_dates,
-                    index=available_analysis_dates.index(saved_avg_start),
+                    options=avg_date_options,
+                    index=avg_date_options.index(saved_avg_start),
                     format_func=_average_date_label,
-                    key="custom_kpi_analysis_average_start",
+                    key="custom_kpi_analysis_avg_start_date",
                 )
 
             with avg_end_col:
                 average_end_date = st.selectbox(
                     "End Date",
-                    options=available_analysis_dates,
-                    index=available_analysis_dates.index(saved_avg_end),
+                    options=avg_date_options,
+                    index=avg_date_options.index(saved_avg_end),
                     format_func=_average_date_label,
-                    key="custom_kpi_analysis_average_end",
+                    key="custom_kpi_analysis_avg_end_date",
                 )
 
-            if average_start_date > average_end_date:
-                average_start_date, average_end_date = (
-                    average_end_date,
-                    average_start_date,
-                )
+            average_start_date, average_end_date = sorted(
+                [average_start_date, average_end_date]
+            )
 
-            average_day_count = (
+            avg_day_count = (
                 pd.Timestamp(average_end_date)
                 - pd.Timestamp(average_start_date)
             ).days + 1
 
             st.caption(
-                f"Selected Average Date Range: "
+                f"📅 Average Date Range: "
                 f"**{pd.Timestamp(average_start_date):%d-%b-%Y} → "
                 f"{pd.Timestamp(average_end_date):%d-%b-%Y}** "
-                f"({average_day_count} day(s))"
+                f"({avg_day_count} day(s))"
             )
 
     if date_evaluation_mode == "Compare 2 Dates":
@@ -6128,6 +6129,7 @@ def render_configurable_kpi_analysis():
         # MODE 2 — AVERAGE DATE RANGE
         # --------------------------------------------------------
         elif date_evaluation_mode == "Average Date Range":
+
             average_source = valid_summary_source[
                 (
                     valid_summary_source["_Summary_Date"]
@@ -6139,7 +6141,7 @@ def render_configurable_kpi_analysis():
                 )
             ].copy()
 
-            average_summary = (
+            summary_df = (
                 average_source
                 .groupby(
                     identity_cols,
@@ -6147,8 +6149,729 @@ def render_configurable_kpi_analysis():
                     dropna=False,
                 )["_KPI_Result_Value"]
                 .agg(summary_agg)
+                .rename(
+                    columns={
+                        "_KPI_Result_Value": primary_kpi,
+                        **rename_map,
+                    }
+                )
             )
 
+            if not summary_df.empty:
+
+                summary_df["Remark"] = summary_df[
+                    primary_kpi
+                ].apply(evaluate_remark)
+
+                summary_df["Threshold"] = float(threshold)
+
+                if (
+                    isinstance(date_range, tuple)
+                    and len(date_range) == 2
+                ):
+                    range_start, range_end = date_range
+                    date_label = (
+                        f"{pd.Timestamp(range_start):%d-%b-%Y}"
+                        f" → "
+                        f"{pd.Timestamp(range_end):%d-%b-%Y}"
+                    )
+                else:
+                    date_label = "Selected Date Range"
+
+                summary_df["Date"] = date_label
+
+                preferred_summary_cols = [
+                    "Cell Name",
+                    "LocalCell Id",
+                    "Sector",
+                    "FreqBand",
+                    "eNodeB Name",
+                    "Date",
+                    primary_kpi,
+                    "Remark",
+                    "Threshold",
+                ]
+
+                summary_cols = [
+                    col
+                    for col in preferred_summary_cols
+                    if col in summary_df.columns
+                ]
+
+                summary_df = summary_df[summary_cols].sort_values(
+                    [
+                        col
+                        for col in [
+                            "Sector",
+                            "FreqBand",
+                            "Cell Name",
+                        ]
+                        if col in summary_df.columns
+                    ]
+                )
+
+                summary_df[primary_kpi] = pd.to_numeric(
+                    summary_df[primary_kpi],
+                    errors="coerce",
+                ).round(4)
+
+                summary_df["Threshold"] = float(threshold)
+
+                meet_count = int(
+                    (summary_df["Remark"] == "Meet").sum()
+                )
+                not_meet_count = int(
+                    (summary_df["Remark"] == "Not Meet").sum()
+                )
+                total_count = len(summary_df)
+
+                st.markdown("### 📋 KPI Result Summary")
+
+                if analysis_cell_site_pairs:
+                    st.caption(
+                        f"Bulk exact-match mode: "
+                        f"{len(analysis_cell_site_pairs):,} Cell + Site + FreqBand target(s). "
+                        "Summary is calculated only from these exact targets."
+                    )
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Meet", f"{meet_count:,}")
+                m2.metric("Not Meet", f"{not_meet_count:,}")
+                m3.metric("Total", f"{total_count:,}")
+
+                comparison_text = (
+                    f"{primary_kpi} ≥ {threshold:g}"
+                    if not lower_is_better
+                    else f"{primary_kpi} ≤ {threshold:g}"
+                )
+
+                st.caption(
+                    f"Average Date Range: {date_label}. "
+                    f"Average {primary_kpi} is evaluated against "
+                    f"{comparison_text}."
+                )
+
+                styled_summary = (
+                    summary_df.style
+                    .map(
+                        style_remark,
+                        subset=["Remark"],
+                    )
+                )
+
+                st.dataframe(
+                    styled_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # --------------------------------------------------------
+        # MODE 3 — COMPARE 2 DATES
+        # --------------------------------------------------------
+        else:
+
+            if (
+                compare_date_a is not None
+                and compare_date_b is not None
+                and len(compare_date_a) == 2
+                and len(compare_date_b) == 2
+            ):
+
+                compare_a_start, compare_a_end = compare_date_a
+                compare_b_start, compare_b_end = compare_date_b
+
+                def aggregate_for_date_range(selected_start, selected_end):
+                    start_ts = pd.Timestamp(selected_start)
+                    end_ts = pd.Timestamp(selected_end)
+
+                    date_source = valid_summary_source[
+                        (
+                            valid_summary_source["_Summary_Date"]
+                            >= start_ts
+                        )
+                        & (
+                            valid_summary_source["_Summary_Date"]
+                            <= end_ts
+                        )
+                    ].copy()
+
+                    if date_source.empty:
+                        return pd.DataFrame()
+
+                    return (
+                        date_source
+                        .groupby(
+                            identity_cols,
+                            as_index=False,
+                            dropna=False,
+                        )["_KPI_Result_Value"]
+                        .agg(summary_agg)
+                    )
+
+                date_a_df = aggregate_for_date_range(
+                    compare_a_start,
+                    compare_a_end,
+                )
+                date_b_df = aggregate_for_date_range(
+                    compare_b_start,
+                    compare_b_end,
+                )
+
+                value_col = "_KPI_Result_Value"
+
+                date_a_df = date_a_df.rename(
+                    columns={value_col: "Date A KPI"}
+                )
+                date_b_df = date_b_df.rename(
+                    columns={value_col: "Date B KPI"}
+                )
+
+                if date_a_df.empty and date_b_df.empty:
+                    compare_summary = pd.DataFrame()
+                else:
+                    compare_summary = pd.merge(
+                        date_a_df,
+                        date_b_df,
+                        on=identity_cols,
+                        how="outer",
+                    )
+
+                if not compare_summary.empty:
+
+                    compare_summary = compare_summary.rename(
+                        columns=rename_map
+                    )
+
+                    def format_compare_range(start_date, end_date):
+                        if start_date == end_date:
+                            return pd.Timestamp(start_date).strftime(
+                                "%d-%b-%Y"
+                            )
+                        return (
+                            f"{pd.Timestamp(start_date):%d-%b-%Y}"
+                            f" → "
+                            f"{pd.Timestamp(end_date):%d-%b-%Y}"
+                        )
+
+                    date_a_label = format_compare_range(
+                        compare_a_start,
+                        compare_a_end,
+                    )
+                    date_b_label = format_compare_range(
+                        compare_b_start,
+                        compare_b_end,
+                    )
+
+                    compare_summary["Date A"] = date_a_label
+                    compare_summary["Date B"] = date_b_label
+
+                    compare_summary["Remark A"] = (
+                        compare_summary["Date A KPI"]
+                        .apply(evaluate_remark)
+                    )
+                    compare_summary["Remark B"] = (
+                        compare_summary["Date B KPI"]
+                        .apply(evaluate_remark)
+                    )
+
+                    compare_summary["Threshold"] = float(threshold)
+
+                    preferred_compare_cols = [
+                        "Cell Name",
+                        "LocalCell Id",
+                        "Sector",
+                        "FreqBand",
+                        "eNodeB Name",
+                        "Date A",
+                        "Date A KPI",
+                        "Remark A",
+                        "Date B",
+                        "Date B KPI",
+                        "Remark B",
+                        "Threshold",
+                    ]
+
+                    compare_cols = [
+                        col
+                        for col in preferred_compare_cols
+                        if col in compare_summary.columns
+                    ]
+
+                    compare_summary = compare_summary[compare_cols]
+
+                    sort_cols = [
+                        col
+                        for col in [
+                            "Sector",
+                            "FreqBand",
+                            "Cell Name",
+                        ]
+                        if col in compare_summary.columns
+                    ]
+                    if sort_cols:
+                        compare_summary = compare_summary.sort_values(
+                            sort_cols
+                        )
+
+                    for value_col in [
+                        "Date A KPI",
+                        "Date B KPI",
+                    ]:
+                        if value_col in compare_summary.columns:
+                            compare_summary[value_col] = pd.to_numeric(
+                                compare_summary[value_col],
+                                errors="coerce",
+                            ).round(4)
+
+                    compare_summary["Threshold"] = float(threshold)
+
+                    meet_a = int(
+                        (compare_summary["Remark A"] == "Meet").sum()
+                    )
+                    not_meet_a = int(
+                        (compare_summary["Remark A"] == "Not Meet").sum()
+                    )
+                    meet_b = int(
+                        (compare_summary["Remark B"] == "Meet").sum()
+                    )
+                    not_meet_b = int(
+                        (compare_summary["Remark B"] == "Not Meet").sum()
+                    )
+
+                    st.markdown("### 📋 KPI Result Summary")
+
+                    st.caption(
+                        f"Compare {date_a_label} vs {date_b_label}. "
+                        f"Threshold = {threshold:g}. "
+                        "Each selected range is aggregated using "
+                        "the current KPI aggregation rule."
+                    )
+
+                    cm1, cm2, cm3, cm4 = st.columns(4)
+                    cm1.metric(
+                        f"Meet — A ({date_a_label})",
+                        f"{meet_a:,}",
+                    )
+                    cm2.metric(
+                        f"Not Meet — A ({date_a_label})",
+                        f"{not_meet_a:,}",
+                    )
+                    cm3.metric(
+                        f"Meet — B ({date_b_label})",
+                        f"{meet_b:,}",
+                    )
+                    cm4.metric(
+                        f"Not Meet — B ({date_b_label})",
+                        f"{not_meet_b:,}",
+                    )
+
+                    styled_compare = (
+                        compare_summary.style
+                        .map(
+                            style_remark,
+                            subset=[
+                                col
+                                for col in [
+                                    "Remark A",
+                                    "Remark B",
+                                ]
+                                if col in compare_summary.columns
+                            ],
+                        )
+                    )
+
+                    st.dataframe(
+                        styled_compare,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            else:
+                st.warning(
+                    "Please select valid Date A and Date B ranges."
+                )
+
+    if analysis_scope == "Site Level":
+        scope_text = (
+            f"Analysis scope: Site Level — {len(analysis_sites)} site(s), "
+            "all Cell Names under the selected site(s)."
+        )
+    else:
+        scope_text = (
+            f"Analysis scope: Cell Level — {len(analysis_sites)} site(s), "
+            f"{len(analysis_bands)} FreqBand(s), "
+            f"{len(analysis_cells)} Cell Name(s)."
+        )
+
+    st.caption(
+        scope_text + " "
+        "RNO interpretation: use the primary KPI as the trigger, then "
+        "compare the related KPI movements at the same Date / Time. "
+        "A correlation is an indicator for investigation, not by itself "
+        "a final root-cause conclusion."
+    )
+
+
+def _bar_xaxis_padding(series):
+    """Return half the smallest positive time interval for bar-edge padding."""
+    s = pd.to_datetime(series, errors="coerce").dropna().sort_values().drop_duplicates()
+    if len(s) < 2:
+        return pd.Timedelta(hours=12)
+    diffs = s.diff().dropna()
+    diffs = diffs[diffs > pd.Timedelta(0)]
+    if diffs.empty:
+        return pd.Timedelta(hours=12)
+    return diffs.min() / 2
+
+
+# KPI Analysis is a fourth, independent Chart Layout.
+# When selected, the normal Horizontal / Vertical / 2 Charts renderer
+# is bypassed and the dedicated analysis sections are shown instead.
+if chart_layout == "KPI Analysis":
+    render_configurable_kpi_analysis()
+    render_kpi_analysis()
+
+
+# ============================================================
+# SITE LEVEL SUMMARY — NON-KPI ANALYSIS LAYOUTS ONLY
+# ============================================================
+#
+# Excel-style site summary:
+#   - Total Payload (GB)      -> SUM, shown as bars
+#   - Last TTI Ratio (%)      -> MAX, shown as line
+#   - 4G Cell Availability(%) -> AVERAGE, shown as line
+#
+# This chart remains available for Horizontal / Vertical / 2 Charts.
+# It is intentionally hidden when Chart Layout = KPI Analysis.
+# It uses the complete selected Site + Date Range data,
+# before Sector/FreqBand chart filters are applied.
+# ============================================================
+
+def _bar_xaxis_padding(series):
+    """Return half the smallest positive time interval for bar-edge padding."""
+    s = pd.to_datetime(series, errors="coerce").dropna().sort_values().drop_duplicates()
+    if len(s) < 2:
+        # A single point still needs a visible bar width.
+        return pd.Timedelta(hours=12)
+    diffs = s.diff().dropna()
+    diffs = diffs[diffs > pd.Timedelta(0)]
+    if diffs.empty:
+        return pd.Timedelta(hours=12)
+    return diffs.min() / 2
+
+
+def render_site_level_summary():
+    if site_level_df.empty:
+        return
+
+    payload_col = kpi_actual_columns.get("Payload")
+    availability_col = kpi_actual_columns.get("4G Cell Availability")
+    last_tti_col = kpi_actual_columns.get("Last TTI Ratio")
+
+    required_cols = [
+        c for c in [payload_col, availability_col, last_tti_col]
+        if c and c in site_level_df.columns
+    ]
+
+    if not required_cols:
+        return
+
+    summary_source = site_level_df[
+        ["_Date"]
+        + required_cols
+    ].copy()
+
+    summary_source["_Payload_Value"] = (
+        parse_kpi_numeric(summary_source[payload_col])
+        if payload_col and payload_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Availability_Value"] = (
+        parse_kpi_numeric(summary_source[availability_col])
+        if availability_col and availability_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Last_TTI_Value"] = (
+        parse_kpi_numeric(summary_source[last_tti_col])
+        if last_tti_col and last_tti_col in summary_source.columns
+        else pd.NA
+    )
+
+    summary_source["_Chart_Date"] = (
+        summary_source["_Date"]
+        if is_hourly
+        else summary_source["_Date"].dt.normalize()
+    )
+
+    summary_df = (
+        summary_source
+        .groupby("_Chart_Date", as_index=False)
+        .agg(
+            Total_Payload_GB=("_Payload_Value", "sum"),
+            Max_Last_TTI_Ratio=("_Last_TTI_Value", "max"),
+            Avg_4G_Cell_Availability=("_Availability_Value", "mean"),
+        )
+        .sort_values("_Chart_Date")
+    )
+
+    if summary_df.empty:
+        return
+
+    # Build an Excel-like combo chart:
+    # Payload = bars on the right axis
+    # Last TTI + Availability = lines on the left axis
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Total_Payload_GB"],
+            name="Average of 4GTotalPayloadGB",
+            yaxis="y2",
+            opacity=0.70,
+            marker=dict(color="#8a8a8a"),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Max_Last_TTI_Ratio"],
+            name="Max of Last TTI Ratio %",
+            mode="lines+markers",
+            line=dict(color="#4472C4", width=7.0),
+            marker=dict(size=10),
+            connectgaps=True,
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=summary_df["_Chart_Date"],
+            y=summary_df["Avg_4G_Cell_Availability"],
+            name="Average of 4G Cell Availability(%)",
+            mode="lines+markers",
+            line=dict(color="#ED7D31", width=7.0),
+            marker=dict(size=9),
+            connectgaps=True,
+        )
+    )
+
+    # Keep both KPI lines visually in front of the Payload bars.
+    # Plotly renders later traces above earlier traces.
+    bars = [trace for trace in fig.data if trace.type == "bar"]
+    lines = [trace for trace in fig.data if trace.type == "scatter"]
+    fig.data = tuple(bars + lines)
+
+    # Explicitly keep KPI lines above the Payload bars.
+    for trace in lines:
+        try:
+            trace.zorder = 100
+        except Exception:
+            pass
+
+    if is_hourly:
+        x_title = "Date / Time"
+        tickformat = "%H:%M<br>%d-%b"
+        hoverformat = "%d-%b-%Y %H:%M"
+    else:
+        x_title = "Date"
+        tickformat = "%d-%b-%y"
+        hoverformat = "%d-%b-%Y"
+
+    # TTI threshold = 35%, shown as a red dashed reference line.
+    # Keep it on the primary (TTI / Availability) axis.
+    fig.add_hline(
+        y=35,
+        line=dict(
+            color="#FF0000",
+            width=2,
+            dash="dash",
+        ),
+        layer="below",
+        annotation_text="TTI Threshold 35%",
+        annotation_position="top left",
+        annotation_font=dict(size=10, color="#FF0000"),
+    )
+
+    # Extend the datetime axis by half a bar interval on both sides.
+    # Without this padding, Plotly centers the first/last bars on the
+    # boundary and clips half of each bar, creating visible left/right gaps.
+    site_x_pad = _bar_xaxis_padding(summary_df["_Chart_Date"])
+    site_x_min = summary_df["_Chart_Date"].min() - site_x_pad
+    site_x_max = summary_df["_Chart_Date"].max() + site_x_pad
+
+    fig.update_layout(
+        title="Site Level Summary",
+        xaxis=dict(
+            title=x_title,
+            tickformat=tickformat,
+            hoverformat=hoverformat,
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            automargin=False,
+            domain=[0.0, 1.0],
+            range=[site_x_min, site_x_max],
+            autorange=False,
+            # Show actual time-of-day on the hourly chart.
+            # 6-hour spacing keeps the chart readable while showing
+            # when a TTI drop occurred.
+            dtick=6 * 60 * 60 * 1000 if is_hourly else None,
+        ),
+        yaxis=dict(
+            title="Last TTI Ratio % / Availability %",
+            range=[0, 120],
+            showgrid=True,
+            gridcolor="#e5e5e5",
+            zeroline=False,
+        ),
+        yaxis2=dict(
+            title="Payload (GB)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            zeroline=False,
+        ),
+        hovermode="x unified",
+        height=500,
+        margin=dict(l=18, r=0, t=60, b=72),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            font=dict(
+                family="Arial",
+                size=11,
+            ),
+        ),
+        bargap=0.03,
+        template="plotly_white",
+    )
+
+    fig.update_traces(
+        selector=dict(type="bar"),
+        hovertemplate=(
+            "<b>Site Total Payload</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Payload: %{y:.2f} GB"
+            "<extra></extra>"
+        ),
+    )
+
+    fig.update_traces(
+        selector=dict(type="scatter"),
+        hovertemplate=(
+            "<b>%{fullData.name}</b><br>"
+            + (
+                "%{x|%d-%b-%Y %H:%M}<br>"
+                if is_hourly
+                else "%{x|%d-%b-%Y}<br>"
+            )
+            + "Value: %{y:.2f}"
+            "<extra></extra>"
+        ),
+    )
+
+    # Add to the grouped JPEG collection and render last.
+    show_chart(
+        fig,
+        use_container_width=True,
+        compact_summary=True,
+    )
+
+
+# Site Level Summary is intentionally hidden in KPI Analysis.
+if chart_layout != "KPI Analysis":
+    render_site_level_summary()
+
+# ============================================================
+# DEBUG
+# ============================================================
+with st.expander(
+    "Debug — Filtered data preview"
+):
+
+    debug_cols = [
+        enodeb_col,
+        cell_col,
+        localcell_col,
+        "_Site_ID",
+        "_Date",
+        "_Sector_Display",
+        "_FreqBand",
+    ]
+
+    debug_cols += [
+        KPI_CONFIG[k]["column"]
+        for k in selected_kpis
+    ]
+
+    debug_cols = [
+        c
+        for c in dict.fromkeys(debug_cols)
+        if c in site_df.columns
+    ]
+
+    st.dataframe(
+        site_df[debug_cols].head(1000),
+        use_container_width=True,
+    )
+
+
+
+
+
+# ============================================================
+# DOWNLOAD — GROUPED JPEG CAPTURE
+# ============================================================
+def _plotly_fig_to_jpeg(fig_obj):
+    """
+    Render a Plotly figure to JPEG using Matplotlib.
+    This avoids Kaleido/Chrome completely, which is important on
+    Streamlit Cloud where Chrome may not be installed.
+    """
+    fig = plt.figure(figsize=(14, 6.5), dpi=120)
+    ax = fig.add_subplot(111)
+
+    title = getattr(fig_obj.layout.title, "text", None)
+    if title:
+        ax.set_title(title, loc="left", fontweight="bold")
+
+    x_title = getattr(fig_obj.layout.xaxis.title, "text", None)
+    y_title = getattr(fig_obj.layout.yaxis.title, "text", None)
+
+    for trace in fig_obj.data:
+        x = list(trace.x) if trace.x is not None else list(range(len(trace.y or [])))
+        y = list(trace.y) if trace.y is not None else []
+
+        name = trace.name or ""
+
+        # Plotly scatter/line/area traces.
+        if trace.type == "scatter":
+            mode = trace.mode or "lines"
+            fill = trace.fill
+
+            if fill and fill != "none":
+                ax.fill_between(x, y, alpha=0.25, label=name)
+                ax.plot(x, y, linewidth=1.8, label=name)
+            elif "markers" in mode and "lines" in mode:
+                ax.plot(x, y, marker="o", markersize=2.5,
+                        linewidth=1.2, label=name)
+            elif "markers" in mode:
+                ax.plot(x, y, marker="o", linestyle="None",
+                        markersize=2.5, label=name)
+            else:
+                ax.plot(x, y, linewidth=1.8, label=name)
+
+        # Bar traces, including TA Distribution.
         elif trace.type == "bar":
             width = 0.75
             ax.bar(x, y, width=width, label=name, alpha=0.85)
