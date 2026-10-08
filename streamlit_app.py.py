@@ -6271,3 +6271,9 @@ if _download_figures:
             use_container_width=False,
         )
 
+
+# ============================================================
+# ACTIVATE KPI ANALYSIS
+# ============================================================
+if chart_layout == "KPI Analysis":
+    render_kpi_analysis()
