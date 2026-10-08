@@ -3686,6 +3686,14 @@ def render_kpi_status_transition():
         ignore_index=True,
     )
 
+    # Keep an untouched copy of ALL pasted targets.
+    # This is intentionally separate from the optional Problem Cell/Site
+    # selector below:
+    #   - Trend chart = always uses ALL pasted targets.
+    #   - Summary/detail = follows Problem Cell/Site selection.
+    #   - Correlation/combo = follows Problem Cell/Site selection.
+    trend_source_result = transition_result.copy()
+
     # ------------------------------------------------------------
     # Optional exact target selector
     # ------------------------------------------------------------
@@ -4000,23 +4008,18 @@ def render_kpi_status_transition():
     # not a prerequisite for the normal KPI trend chart.
     st.markdown("#### 📈 Selected Cell KPI Trend — Cell Name")
     st.caption(
-        "Trend chart is available without selecting Problem Cell / Site. "
-        "When Problem Cell / Site targets are selected, the trend follows "
-        "those exact targets."
+        "Trend chart always follows the complete pasted target list. "
+        "Select Problem Cell / Site only to focus the correlation/combo chart "
+        "below."
     )
 
-    if selected_target_labels:
-        selected_scope = transition_result[
-            [
-                "_Cell_Display",
-                "_Site_ID_Search",
-                "_FreqBand",
-            ]
-        ].drop_duplicates().copy()
-    elif not transition_result.empty:
-        # A pasted Problematic Cell Target List exists, but the user has not
-        # selected a subset. Show the trend for ALL pasted targets.
-        selected_scope = transition_result[
+    # -------------------------
+    # Chart 1: Trend scope
+    # -------------------------
+    # NEVER use the Problem Cell/Site selector here.
+    # The trend must continue to show the complete pasted target list.
+    if not trend_source_result.empty:
+        trend_scope = trend_source_result[
             [
                 "_Cell_Display",
                 "_Site_ID_Search",
@@ -4024,28 +4027,37 @@ def render_kpi_status_transition():
             ]
         ].drop_duplicates().copy()
     elif not site_level_df.empty:
-        # No Problematic Cell Target List / no explicit target selection:
-        # fall back to the normal Site Search scope so the trend chart still
-        # renders using the dashboard's existing site/eNodeB search behavior.
+        # If there is no pasted target list, preserve the normal
+        # Site Search / Full eNodeB Name behavior.
         fallback_cols = [
             "_Cell_Display",
             "_Site_ID_Search",
             "_FreqBand",
         ]
         if all(col in site_level_df.columns for col in fallback_cols):
-            selected_scope = site_level_df[fallback_cols].drop_duplicates().copy()
+            trend_scope = site_level_df[fallback_cols].drop_duplicates().copy()
         else:
-            selected_scope = pd.DataFrame(
-                columns=fallback_cols
-            )
+            trend_scope = pd.DataFrame(columns=fallback_cols)
     else:
-        selected_scope = pd.DataFrame(
+        trend_scope = pd.DataFrame(
             columns=[
                 "_Cell_Display",
                 "_Site_ID_Search",
                 "_FreqBand",
             ]
         )
+
+    # -------------------------
+    # Chart 2: Correlation scope
+    # -------------------------
+    # This is the ONLY chart affected by Select Problem Cell / Site.
+    correlation_scope = transition_result[
+        [
+            "_Cell_Display",
+            "_Site_ID_Search",
+            "_FreqBand",
+        ]
+    ].drop_duplicates().copy()
 
     # IMPORTANT:
     # The combo chart must use the KPIs selected in "KPIs to Compare",
@@ -4129,7 +4141,7 @@ def render_kpi_status_transition():
         # selection and keeping Cell Name as the trace identity.
         for kpi_name in sorted(scope_kpis):
             trend_df = build_scope_history(
-                selected_scope,
+                trend_scope,
                 kpi_name,
             )
 
@@ -4222,7 +4234,7 @@ def render_kpi_status_transition():
         if selected_target_labels and len(scope_kpis) >= 1:
             st.markdown("#### 🔬 KPI Correlation — Selected Cell/Site")
             st.caption(
-                "Problem Cell / Site selection controls this correlation chart. "
+                "Problem Cell / Site selection controls this correlation chart only. "
                 "Primary KPI comes from KPIs to Compare. Counter KPI can be "
                 "any available KPI, so you can correlate RANK2/SSSR/Availability "
                 "with Average TA, CQI, PRB, Payload, etc."
@@ -4262,13 +4274,13 @@ def render_kpi_status_transition():
             )
 
             primary_history = build_scope_history(
-                selected_scope,
+                correlation_scope,
                 primary_kpi,
             )
 
             counter_history = (
                 build_scope_history(
-                    selected_scope,
+                    correlation_scope,
                     counter_kpi,
                 )
                 if counter_kpi != "None"
