@@ -1851,6 +1851,208 @@ with band_col:
         help="Choose which frequency bands are included in the charts.",
     )
 
+# ============================================================
+# GLOBAL BULK CELL + SITE + FREQBAND TARGET FILTER
+# ============================================================
+# If the user has already entered the exact Bulk Cell + Site + FreqBand
+# list in KPI Analysis, make that list the source of truth for ALL chart
+# layouts — Horizontal, Vertical, 2 Charts, and KPI Analysis.
+#
+# This fixes the previous behavior where the regular charts could still
+# show every cell belonging to the selected site even though the user
+# had supplied an exact Cell + Site + FreqBand target list.
+#
+# The input order can be any of:
+#   FreqBand | Cell | Site
+#   Site | FreqBand | Cell
+#   Cell | FreqBand | Site
+#
+# The session-state value is used because the Bulk text area itself is
+# rendered later inside KPI Analysis.
+# ============================================================
+global_bulk_text = st.session_state.get(
+    "custom_kpi_analysis_bulk_cell_site_list",
+    "",
+)
+
+global_bulk_pairs = []
+global_bulk_cell_order = []
+
+if isinstance(global_bulk_text, str) and global_bulk_text.strip():
+
+    global_available_cells = set(
+        site_df["_Cell_Display"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    global_available_sites = set(
+        site_df["_Site_ID_Search"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    global_available_enodebs = set(
+        site_df["_eNodeB_Search"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .unique()
+    )
+
+    global_available_bands = set(
+        site_df["_FreqBand"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .map(
+            lambda value: (
+                value[1:]
+                if value.startswith("L")
+                else value
+            )
+        )
+        .unique()
+    )
+
+    def _global_normalize_band(value):
+        value = str(value).strip().upper()
+        return value[1:] if value.startswith("L") else value
+
+    for raw_line in global_bulk_text.splitlines():
+
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        fields = [
+            field.strip()
+            for field in re.split(
+                r"\t|\||;",
+                line,
+            )
+            if field.strip()
+        ]
+
+        if len(fields) < 3:
+            continue
+
+        cell_value = None
+        site_value = None
+        band_value = None
+
+        # Identify Cell Name.
+        for field in fields:
+            field_upper = field.upper()
+
+            if field_upper in global_available_cells:
+                cell_value = field_upper
+                break
+
+        # Identify Site ID / eNodeB.
+        for field in fields:
+            field_upper = field.upper()
+
+            if field_upper in global_available_sites:
+                site_value = field_upper
+                break
+
+            if field_upper in global_available_enodebs:
+                site_value = field_upper
+                break
+
+        # Identify FreqBand.
+        for field in fields:
+            normalized_band = _global_normalize_band(field)
+
+            if normalized_band in global_available_bands:
+                band_value = normalized_band
+                break
+
+        if cell_value and site_value and band_value:
+            target = (
+                cell_value,
+                site_value,
+                band_value,
+            )
+
+            if target not in global_bulk_pairs:
+                global_bulk_pairs.append(target)
+
+            if cell_value not in global_bulk_cell_order:
+                global_bulk_cell_order.append(cell_value)
+
+if global_bulk_pairs:
+
+    global_pair_mask = pd.Series(
+        False,
+        index=site_df.index,
+    )
+
+    for (
+        target_cell,
+        target_site,
+        target_band,
+    ) in global_bulk_pairs:
+
+        cell_mask = (
+            site_df["_Cell_Display"]
+            .astype(str)
+            .str.upper()
+            .eq(target_cell)
+        )
+
+        if target_site.startswith("SUM-"):
+            site_mask = (
+                site_df["_Site_ID_Search"]
+                .astype(str)
+                .str.upper()
+                .eq(target_site)
+            )
+        else:
+            site_mask = (
+                site_df["_eNodeB_Search"]
+                .astype(str)
+                .str.upper()
+                .eq(target_site)
+            )
+
+        band_mask = (
+            site_df["_FreqBand"]
+            .astype(str)
+            .str.upper()
+            .map(_global_normalize_band)
+            .eq(target_band)
+        )
+
+        global_pair_mask = (
+            global_pair_mask
+            | (
+                cell_mask
+                & site_mask
+                & band_mask
+            )
+        )
+
+    site_df = site_df[
+        global_pair_mask
+    ].copy()
+
+    st.caption(
+        "🎯 Exact Bulk Target Mode active: "
+        f"{len(global_bulk_pairs):,} Cell + Site + FreqBand target(s). "
+        "Charts show only the cells entered in the Bulk list."
+    )
+
 # Keep the date/site-filtered data for the Site Level Summary used by
 # non-KPI-Analysis layouts. This is captured BEFORE Sector/FreqBand
 # chart filters so the summary represents the complete selected site.
@@ -2479,6 +2681,11 @@ for kpi_name in main_chart_kpis:
                 x="_Chart_Date",
                 y="_KPI_Value",
                 color="_Cell_Display",
+                category_orders=(
+                    {"_Cell_Display": global_bulk_cell_order}
+                    if global_bulk_cell_order
+                    else None
+                ),
                 markers=False,
             )
         else:
@@ -2487,6 +2694,11 @@ for kpi_name in main_chart_kpis:
                 x="_Chart_Date",
                 y="_KPI_Value",
                 color="_Cell_Display",
+                category_orders=(
+                    {"_Cell_Display": global_bulk_cell_order}
+                    if global_bulk_cell_order
+                    else None
+                ),
                 markers=True,
             )
 
@@ -2673,6 +2885,11 @@ for kpi_name in main_chart_kpis:
                 x="_Chart_Date",
                 y="_KPI_Value",
                 color="_Cell_Display",
+                category_orders=(
+                    {"_Cell_Display": global_bulk_cell_order}
+                    if global_bulk_cell_order
+                    else None
+                ),
                 markers=False,
             )
         else:
@@ -2681,6 +2898,11 @@ for kpi_name in main_chart_kpis:
                 x="_Chart_Date",
                 y="_KPI_Value",
                 color="_Cell_Display",
+                category_orders=(
+                    {"_Cell_Display": global_bulk_cell_order}
+                    if global_bulk_cell_order
+                    else None
+                ),
                 markers=True,
             )
 
