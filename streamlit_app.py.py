@@ -4782,21 +4782,17 @@ def render_configurable_kpi_analysis():
                 ]
             ].copy()
 
-            if primary_kpi.upper() == "PAYLOAD":
-                # Payload is normally evaluated as a threshold KPI only
-                # when the user explicitly sets one. Keep the same generic
-                # higher-is-better rule used by this filter.
-                latest_status["_Status"] = np.where(
-                    latest_status[primary_kpi] >= float(threshold),
-                    "Meet",
-                    "Not Meet",
-                )
-            else:
-                latest_status["_Status"] = np.where(
-                    latest_status[primary_kpi] >= float(threshold),
-                    "Meet",
-                    "Not Meet",
-                )
+            # Use native pandas instead of np.where().
+            # This dashboard does not import NumPy, and NumPy is not
+            # required for this simple Meet / Not Meet classification.
+            latest_status["_Status"] = (
+                latest_status[primary_kpi]
+                .ge(float(threshold))
+                .map({
+                    True: "Meet",
+                    False: "Not Meet",
+                })
+            )
 
             if chart_status_filter == "Meet Only":
                 allowed_cells = set(
