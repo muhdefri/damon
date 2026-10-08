@@ -3603,11 +3603,11 @@ def render_configurable_kpi_analysis():
     analysis_bulk_bands = []
 
     with st.expander(
-        "📋 Bulk Cell + Site + FreqBand List — Paste from Excel",
-        expanded=False,
+        "🎯 KPI ANALYSIS — BULK CELL + SITE + FREQBAND INPUT",
+        expanded=True,
     ):
         bulk_cell_site_text = st.text_area(
-            "Paste Cell Name + Site ID/eNodeB Name + FreqBand",
+            "PASTE YOUR 3-COLUMN EXCEL LIST HERE",
             placeholder=(
                 "850\\tJB4G85_4264237E85_131\\tSUM-JA-MBN-0779\\n"
                 "SUM-JA-MBN-0779\\t850\\tJB4G85_4264237E85_133\\n"
