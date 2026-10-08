@@ -3994,8 +3994,8 @@ def render_kpi_status_transition():
         st.markdown("#### 📈 Selected Cell KPI Trend — Cell Name")
         st.caption(
             "Trend scope follows the selected Problem Cell / Site target(s). "
-            "The chart is shown even when the selected KPI is currently Meet, "
-            "so the cell can still be investigated historically."
+            "The KPI list follows **KPIs to Compare**, so a KPI can still be "
+            "selected for comparison even when it is currently Meet."
         )
 
         selected_scope = transition_result[
@@ -4006,19 +4006,22 @@ def render_kpi_status_transition():
             ]
         ].drop_duplicates().copy()
 
-        # KPIs available for this exact selected target scope.
+        # IMPORTANT:
+        # The combo chart must use the KPIs selected in "KPIs to Compare",
+        # NOT only the KPIs that happen to be Not Meet in the current
+        # transition table.
+        #
+        # Example:
+        #   KPIs to Compare = 4G Cell Availability + SSSR
+        #   Primary = 4G Cell Availability
+        #   Counter = SSSR
+        #
+        # Even if Availability is currently Meet, it must still be available
+        # as a counter/primary KPI for investigation.
         scope_kpis = [
-            k for k in display_df["KPI"].dropna().unique()
+            k for k in transition_kpis
             if k in kpi_actual_columns
         ]
-
-        # If Not Meet Only made display_df empty, use all KPIs that were
-        # selected in the transition result before the transition filter.
-        if not scope_kpis:
-            scope_kpis = [
-                k for k in transition_result["KPI"].dropna().unique()
-                if k in kpi_actual_columns
-            ]
 
         def build_scope_history(target_rows, kpi_name):
             actual_col = kpi_actual_columns.get(kpi_name)
