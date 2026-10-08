@@ -3687,6 +3687,76 @@ def render_kpi_status_transition():
     )
 
     # ------------------------------------------------------------
+    # Optional exact target selector
+    # ------------------------------------------------------------
+    # IMPORTANT: Apply this BEFORE summary/detail/chart calculations.
+    # This makes the KPI Action Summary, transition counts, detail table,
+    # and trend charts all use only the selected Cell + Site + FreqBand.
+    target_selector_df = transition_result[
+        [
+            "_Cell_Display",
+            "_Site_ID_Search",
+            "_FreqBand",
+        ]
+    ].drop_duplicates().copy()
+
+    selected_target_labels = []
+
+    if not target_selector_df.empty:
+        target_selector_df["_Target Label"] = (
+            target_selector_df["_FreqBand"].astype(str)
+            + " | "
+            + target_selector_df["_Cell_Display"].astype(str)
+            + " | "
+            + target_selector_df["_Site_ID_Search"].astype(str)
+        )
+
+        target_labels = sorted(
+            target_selector_df["_Target Label"].dropna().unique().tolist()
+        )
+
+        st.markdown("#### 🎯 Select Problem Cell / Site")
+
+        selected_target_labels = st.multiselect(
+            "Select one or more exact targets",
+            options=target_labels,
+            default=[],
+            key="kpi_status_selected_targets_v37",
+            placeholder="All targets — select specific Cell + Site to focus analysis",
+            help=(
+                "Optional filter. Leave empty to analyze all pasted targets. "
+                "Select one or more targets to focus the entire KPI Status "
+                "Transition analysis on those exact Cell + Site + FreqBand combinations."
+            ),
+        )
+
+        if selected_target_labels:
+            selected_target_set = set(selected_target_labels)
+
+            transition_result["_Target Label"] = (
+                transition_result["_FreqBand"].astype(str)
+                + " | "
+                + transition_result["_Cell_Display"].astype(str)
+                + " | "
+                + transition_result["_Site_ID_Search"].astype(str)
+            )
+
+            transition_result = transition_result[
+                transition_result["_Target Label"].isin(selected_target_set)
+            ].copy()
+
+            st.caption(
+                f"🎯 Focused analysis: **{len(selected_target_labels)}** "
+                "selected target(s). Summary, detail and charts are now "
+                "restricted to these targets."
+            )
+        else:
+            st.caption(
+                "All pasted targets are included. Select one or more "
+                "Cell + Site + FreqBand targets to focus the analysis."
+            )
+
+    # ------------------------------------------------------------
     # Main transition filter
     # ------------------------------------------------------------
     transition_filter = st.selectbox(
@@ -3813,97 +3883,6 @@ def render_kpi_status_transition():
                 kpi_summary,
                 use_container_width=True,
                 hide_index=True,
-            )
-
-    # ------------------------------------------------------------
-    # Optional exact target selector
-    # ------------------------------------------------------------
-    # Build exact target labels from the transition result. This selector
-    # narrows the current analysis without changing the pasted master list.
-    target_selector_df = transition_result[
-        [
-            "_Cell_Display",
-            "_Site_ID_Search",
-            "_FreqBand",
-        ]
-    ].drop_duplicates().copy()
-
-    if not target_selector_df.empty:
-        target_selector_df["_Target Label"] = (
-            target_selector_df["_FreqBand"].astype(str)
-            + " | "
-            + target_selector_df["_Cell_Display"].astype(str)
-            + " | "
-            + target_selector_df["_Site_ID_Search"].astype(str)
-        )
-
-        target_labels = sorted(
-            target_selector_df["_Target Label"].dropna().unique().tolist()
-        )
-
-        st.markdown("#### 🎯 Select Problem Cell / Site")
-
-        selected_target_labels = st.multiselect(
-            "Select one or more exact targets",
-            options=target_labels,
-            default=[],
-            key="kpi_status_selected_targets_v32",
-            placeholder="All targets — select specific Cell + Site to focus analysis",
-            help=(
-                "Optional filter. Leave empty to show all pasted targets. "
-                "Select one or more targets to show only those Cell + Site + "
-                "FreqBand combinations in the summary, detail table, and trend charts."
-            ),
-        )
-
-        if selected_target_labels:
-            selected_target_set = set(selected_target_labels)
-
-            def make_target_label(row):
-                return (
-                    str(row["_FreqBand"])
-                    + " | "
-                    + str(row["_Cell_Display"])
-                    + " | "
-                    + str(row["_Site_ID_Search"])
-                )
-
-            transition_result["_Target Label"] = transition_result.apply(
-                make_target_label,
-                axis=1,
-            )
-
-            transition_result = transition_result[
-                transition_result["_Target Label"].isin(
-                    selected_target_set
-                )
-            ].copy()
-
-            # Re-apply the currently selected transition filter after the
-            # exact Cell/Site/FreqBand selector.
-            if transition_filter == "Not Meet Only":
-                display_df = transition_result[
-                    transition_result["Status After"].eq("Not Meet")
-                ].copy()
-            elif transition_filter == "All":
-                display_df = transition_result.copy()
-            elif transition_filter == "No Data":
-                display_df = transition_result[
-                    transition_result["Transition"].eq("No Data")
-                ].copy()
-            else:
-                display_df = transition_result[
-                    transition_result["Transition"].eq(transition_filter)
-                ].copy()
-
-            st.caption(
-                f"🎯 Focused analysis: **{len(selected_target_labels)}** "
-                "selected target(s)."
-            )
-        else:
-            st.caption(
-                "All pasted targets are included. Select one or more "
-                "Cell + Site + FreqBand targets above to focus the analysis."
             )
 
     # ------------------------------------------------------------
