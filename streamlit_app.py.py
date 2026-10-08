@@ -4222,6 +4222,13 @@ def render_configurable_kpi_analysis():
         .unique()
     )
 
+    # Force every option to be a native Python datetime.date.
+    # This avoids numpy datetime/date objects reaching Streamlit widgets.
+    available_analysis_dates = [
+        pd.Timestamp(value).date()
+        for value in available_analysis_dates
+    ]
+
     compare_date_a = None
     compare_date_b = None
 
@@ -4232,85 +4239,118 @@ def render_configurable_kpi_analysis():
                 "in the current KPI Analysis filter."
             )
         else:
-            min_analysis_date = available_analysis_dates[0]
-            max_analysis_date = available_analysis_dates[-1]
+            date_options = available_analysis_dates
 
-            def normalize_saved_date(key, default_date):
+            def safe_saved_date(key, default_index):
                 saved = st.session_state.get(key)
-                if isinstance(saved, __import__("datetime").datetime):
-                    saved = saved.date()
-                if isinstance(saved, __import__("datetime").date):
-                    if min_analysis_date <= saved <= max_analysis_date:
-                        return saved
-                return default_date
 
-            # Date A: explicit Start / End inputs.
+                if isinstance(saved, pd.Timestamp):
+                    saved = saved.date()
+
+                if hasattr(saved, "date") and not isinstance(saved, type(None)):
+                    try:
+                        saved = saved.date()
+                    except Exception:
+                        pass
+
+                if saved in date_options:
+                    return saved
+
+                return date_options[
+                    min(
+                        max(default_index, 0),
+                        len(date_options) - 1,
+                    )
+                ]
+
+            def date_label(value):
+                return pd.Timestamp(value).strftime("%d-%b-%Y")
+
+            # ========================================================
+            # DATE A
+            # ========================================================
             with date_a_col:
                 st.markdown("**Date A**")
-                a_start_col, a_end_col = st.columns(2, gap="small")
+
+                a_start_col, a_end_col = st.columns(
+                    2,
+                    gap="small",
+                )
 
                 with a_start_col:
-                    compare_a_start = st.date_input(
+                    a_start_default = safe_saved_date(
+                        "custom_kpi_analysis_compare_a_start",
+                        0,
+                    )
+
+                    compare_a_start = st.selectbox(
                         "Start",
-                        value=normalize_saved_date(
-                            "custom_kpi_analysis_compare_a_start",
-                            min_analysis_date,
-                        ),
-                        min_value=min_analysis_date,
-                        max_value=max_analysis_date,
-                        format="DD-MMM-YYYY",
+                        options=date_options,
+                        index=date_options.index(a_start_default),
+                        format_func=date_label,
                         key="custom_kpi_analysis_compare_a_start",
-                        help="Start date for Date A.",
                     )
 
                 with a_end_col:
-                    compare_a_end = st.date_input(
-                        "End",
-                        value=normalize_saved_date(
-                            "custom_kpi_analysis_compare_a_end",
-                            compare_a_start,
-                        ),
-                        min_value=min_analysis_date,
-                        max_value=max_analysis_date,
-                        format="DD-MMM-YYYY",
-                        key="custom_kpi_analysis_compare_a_end",
-                        help="End date for Date A.",
+                    # Default End = same day as Start for a clean 1-day
+                    # comparison. The user can then select any later date.
+                    saved_a_end = st.session_state.get(
+                        "custom_kpi_analysis_compare_a_end"
                     )
 
-            # Date B: explicit Start / End inputs.
+                    if saved_a_end not in date_options:
+                        saved_a_end = compare_a_start
+
+                    compare_a_end = st.selectbox(
+                        "End",
+                        options=date_options,
+                        index=date_options.index(saved_a_end),
+                        format_func=date_label,
+                        key="custom_kpi_analysis_compare_a_end",
+                    )
+
+            # ========================================================
+            # DATE B
+            # ========================================================
             with date_b_col:
                 st.markdown("**Date B**")
-                b_start_col, b_end_col = st.columns(2, gap="small")
+
+                b_start_col, b_end_col = st.columns(
+                    2,
+                    gap="small",
+                )
 
                 with b_start_col:
-                    compare_b_start = st.date_input(
+                    b_start_default = safe_saved_date(
+                        "custom_kpi_analysis_compare_b_start",
+                        len(date_options) - 1,
+                    )
+
+                    compare_b_start = st.selectbox(
                         "Start",
-                        value=normalize_saved_date(
-                            "custom_kpi_analysis_compare_b_start",
-                            max_analysis_date,
-                        ),
-                        min_value=min_analysis_date,
-                        max_value=max_analysis_date,
-                        format="DD-MMM-YYYY",
+                        options=date_options,
+                        index=date_options.index(b_start_default),
+                        format_func=date_label,
                         key="custom_kpi_analysis_compare_b_start",
-                        help="Start date for Date B.",
                     )
 
                 with b_end_col:
-                    compare_b_end = st.date_input(
-                        "End",
-                        value=normalize_saved_date(
-                            "custom_kpi_analysis_compare_b_end",
-                            max_analysis_date,
-                        ),
-                        min_value=min_analysis_date,
-                        max_value=max_analysis_date,
-                        format="DD-MMM-YYYY",
-                        key="custom_kpi_analysis_compare_b_end",
-                        help="End date for Date B.",
+                    saved_b_end = st.session_state.get(
+                        "custom_kpi_analysis_compare_b_end"
                     )
 
-            # Always keep ranges chronological.
+                    if saved_b_end not in date_options:
+                        saved_b_end = compare_b_start
+
+                    compare_b_end = st.selectbox(
+                        "End",
+                        options=date_options,
+                        index=date_options.index(saved_b_end),
+                        format_func=date_label,
+                        key="custom_kpi_analysis_compare_b_end",
+                    )
+
+            # Always normalize Start <= End.
             compare_a_start, compare_a_end = sorted(
                 [compare_a_start, compare_a_end]
             )
