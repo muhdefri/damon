@@ -5365,7 +5365,25 @@ def render_configurable_kpi_analysis():
             "_FreqBand": "FreqBand",
         }
 
-        if analysis_scope == "Cell Level":
+        # IMPORTANT:
+        # Bulk exact targets are always evaluated at CELL grain,
+        # regardless of the UI Analysis Scope selection.
+        #
+        # A bulk row represents:
+        #   Cell Name + Site/eNodeB + FreqBand
+        #
+        # Therefore the KPI Result Summary must never collapse these
+        # targets to Site/eNodeB grain. Keep Cell Name, LocalCell Id,
+        # Sector and FreqBand in the grouping so the RNO user can
+        # identify the exact degraded cell.
+        if analysis_cell_site_pairs:
+            identity_cols.extend([
+                "_Cell_Display",
+                localcell_col,
+                "_Sector_Display",
+                "_FreqBand",
+            ])
+        elif analysis_scope == "Cell Level":
             identity_cols.extend([
                 "_Cell_Display",
                 localcell_col,
@@ -5467,12 +5485,12 @@ def render_configurable_kpi_analysis():
                 summary_df["Threshold"] = float(threshold)
 
                 preferred_summary_cols = [
-                    "eNodeB Name",
                     "Cell Name",
                     "LocalCell Id",
-                    "Date",
                     "Sector",
                     "FreqBand",
+                    "eNodeB Name",
+                    "Date",
                     primary_kpi,
                     "Remark",
                     "Threshold",
@@ -5596,12 +5614,12 @@ def render_configurable_kpi_analysis():
                 summary_df["Date"] = date_label
 
                 preferred_summary_cols = [
-                    "eNodeB Name",
                     "Cell Name",
                     "LocalCell Id",
-                    "Date",
                     "Sector",
                     "FreqBand",
+                    "eNodeB Name",
+                    "Date",
                     primary_kpi,
                     "Remark",
                     "Threshold",
@@ -5765,17 +5783,17 @@ def render_configurable_kpi_analysis():
                     compare_summary["Threshold"] = float(threshold)
 
                     preferred_compare_cols = [
-                        "eNodeB Name",
                         "Cell Name",
                         "LocalCell Id",
+                        "Sector",
+                        "FreqBand",
+                        "eNodeB Name",
                         "Date A",
                         "Date A KPI",
                         "Remark A",
                         "Date B",
                         "Date B KPI",
                         "Remark B",
-                        "Sector",
-                        "FreqBand",
                         "Threshold",
                     ]
 
