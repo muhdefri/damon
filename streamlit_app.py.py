@@ -4224,8 +4224,6 @@ def render_configurable_kpi_analysis():
 
     compare_date_a = None
     compare_date_b = None
-    compare_date_a_range = None
-    compare_date_b_range = None
 
     if date_evaluation_mode == "Compare 2 Dates":
         if len(available_analysis_dates) < 1:
@@ -4237,92 +4235,96 @@ def render_configurable_kpi_analysis():
             min_analysis_date = available_analysis_dates[0]
             max_analysis_date = available_analysis_dates[-1]
 
-            # Use separate keys from the old single-date selectboxes so
-            # Streamlit does not reuse an incompatible scalar state.
-            previous_a_range = st.session_state.get(
-                "custom_kpi_analysis_compare_date_a_range"
-            )
-            previous_b_range = st.session_state.get(
-                "custom_kpi_analysis_compare_date_b_range"
-            )
+            def normalize_saved_date(key, default_date):
+                saved = st.session_state.get(key)
+                if isinstance(saved, __import__("datetime").datetime):
+                    saved = saved.date()
+                if isinstance(saved, __import__("datetime").date):
+                    if min_analysis_date <= saved <= max_analysis_date:
+                        return saved
+                return default_date
 
-            def normalize_date_range_state(previous, default_date):
-                if (
-                    isinstance(previous, (tuple, list))
-                    and len(previous) == 2
-                    and all(
-                        isinstance(value, __import__("datetime").date)
-                        for value in previous
-                    )
-                ):
-                    start_date, end_date = previous
-                    start_date = max(start_date, min_analysis_date)
-                    end_date = min(end_date, max_analysis_date)
-                    if start_date <= end_date:
-                        return (start_date, end_date)
-
-                return (default_date, default_date)
-
-            default_a_range = normalize_date_range_state(
-                previous_a_range,
-                min_analysis_date,
-            )
-            default_b_range = normalize_date_range_state(
-                previous_b_range,
-                max_analysis_date,
-            )
-
+            # Date A: explicit Start / End inputs.
             with date_a_col:
-                compare_date_a_range = st.date_input(
-                    "Date A",
-                    value=default_a_range,
-                    min_value=min_analysis_date,
-                    max_value=max_analysis_date,
-                    format="DD-MMM-YYYY",
-                    key="custom_kpi_analysis_compare_date_a_range",
-                    help=(
-                        "Select one date for a single-day comparison, "
-                        "or select a start and end date to calculate the "
-                        "KPI over multiple days."
-                    ),
-                )
+                st.markdown("**Date A**")
+                a_start_col, a_end_col = st.columns(2, gap="small")
 
+                with a_start_col:
+                    compare_a_start = st.date_input(
+                        "Start",
+                        value=normalize_saved_date(
+                            "custom_kpi_analysis_compare_a_start",
+                            min_analysis_date,
+                        ),
+                        min_value=min_analysis_date,
+                        max_value=max_analysis_date,
+                        format="DD-MMM-YYYY",
+                        key="custom_kpi_analysis_compare_a_start",
+                        help="Start date for Date A.",
+                    )
+
+                with a_end_col:
+                    compare_a_end = st.date_input(
+                        "End",
+                        value=normalize_saved_date(
+                            "custom_kpi_analysis_compare_a_end",
+                            compare_a_start,
+                        ),
+                        min_value=min_analysis_date,
+                        max_value=max_analysis_date,
+                        format="DD-MMM-YYYY",
+                        key="custom_kpi_analysis_compare_a_end",
+                        help="End date for Date A.",
+                    )
+
+            # Date B: explicit Start / End inputs.
             with date_b_col:
-                compare_date_b_range = st.date_input(
-                    "Date B",
-                    value=default_b_range,
-                    min_value=min_analysis_date,
-                    max_value=max_analysis_date,
-                    format="DD-MMM-YYYY",
-                    key="custom_kpi_analysis_compare_date_b_range",
-                    help=(
-                        "Select one date for a single-day comparison, "
-                        "or select a start and end date to calculate the "
-                        "KPI over multiple days."
-                    ),
-                )
+                st.markdown("**Date B**")
+                b_start_col, b_end_col = st.columns(2, gap="small")
 
-            # Streamlit returns a date for a single selected day and a
-            # tuple for a selected range. Normalize both into (start, end).
-            if isinstance(compare_date_a_range, tuple):
-                compare_date_a_start, compare_date_a_end = compare_date_a_range
-            else:
-                compare_date_a_start = compare_date_a_range
-                compare_date_a_end = compare_date_a_range
+                with b_start_col:
+                    compare_b_start = st.date_input(
+                        "Start",
+                        value=normalize_saved_date(
+                            "custom_kpi_analysis_compare_b_start",
+                            max_analysis_date,
+                        ),
+                        min_value=min_analysis_date,
+                        max_value=max_analysis_date,
+                        format="DD-MMM-YYYY",
+                        key="custom_kpi_analysis_compare_b_start",
+                        help="Start date for Date B.",
+                    )
 
-            if isinstance(compare_date_b_range, tuple):
-                compare_date_b_start, compare_date_b_end = compare_date_b_range
-            else:
-                compare_date_b_start = compare_date_b_range
-                compare_date_b_end = compare_date_b_range
+                with b_end_col:
+                    compare_b_end = st.date_input(
+                        "End",
+                        value=normalize_saved_date(
+                            "custom_kpi_analysis_compare_b_end",
+                            max_analysis_date,
+                        ),
+                        min_value=min_analysis_date,
+                        max_value=max_analysis_date,
+                        format="DD-MMM-YYYY",
+                        key="custom_kpi_analysis_compare_b_end",
+                        help="End date for Date B.",
+                    )
+
+            # Always keep ranges chronological.
+            compare_a_start, compare_a_end = sorted(
+                [compare_a_start, compare_a_end]
+            )
+            compare_b_start, compare_b_end = sorted(
+                [compare_b_start, compare_b_end]
+            )
 
             compare_date_a = (
-                compare_date_a_start,
-                compare_date_a_end,
+                compare_a_start,
+                compare_a_end,
             )
             compare_date_b = (
-                compare_date_b_start,
-                compare_date_b_end,
+                compare_b_start,
+                compare_b_end,
             )
 
     st.caption(
@@ -4332,8 +4334,7 @@ def render_configurable_kpi_analysis():
             else
             (
                 "Compare Date A vs Date B. Each side can be one day or "
-                "a multi-day range; the KPI is aggregated across the "
-                "selected days using the same aggregation rule."
+                "a multi-day range. Same Start/End = single-day comparison."
                 if date_evaluation_mode == "Compare 2 Dates"
                 else
                 "Daily evaluation checks each date independently."
