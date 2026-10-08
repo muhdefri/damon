@@ -11,6 +11,7 @@ import matplotlib.dates as mdates
 import re
 import io
 import math
+import unicodedata
 
 # ============================================================
 # PAGE CONFIG
@@ -902,6 +903,38 @@ def parse_kpi_numeric(series):
     return pd.to_numeric(cleaned, errors="coerce")
 
 
+def normalize_cell_name(value):
+    """
+    Normalize Cell Name values so visually identical cells cannot
+    become separate Plotly series because of hidden Unicode characters,
+    non-breaking spaces, inconsistent whitespace, or letter case.
+
+    The returned display value is kept in a stable uppercase form so
+    grouping/coloring always treats the same Cell Name as one series.
+    """
+    if pd.isna(value):
+        return ""
+
+    text = unicodedata.normalize("NFKC", str(value))
+
+    # Remove common invisible characters from exported CSVs.
+    text = (
+        text
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+        .replace("\xa0", " ")
+    )
+
+    # Collapse repeated whitespace and trim.
+    text = re.sub(r"\\s+", " ", text).strip()
+
+    # Cell names in this dashboard are identifiers; case should not
+    # create a second visual series.
+    return text.upper()
+
+
 def normalize_header(value):
     """
     Normalize a CSV header for tolerant matching.
@@ -1019,7 +1052,7 @@ def apply_internal_mapping(df, localcell_col):
 
 
 # ============================================================
-# UPLOAD — ONLY RAW KPI CSV
+# UPLOAD — RAW KPI CSV / CSV.GZ
 # ============================================================
 st.sidebar.header("Upload")
 
@@ -1030,16 +1063,20 @@ uploaded_csv = st.sidebar.file_uploader(
 )
 
 if uploaded_csv is None:
-    st.info("Upload your KPI CSV or CSV.GZ from the sidebar.")
+    st.info("Upload your KPI CSV / CSV.GZ from the sidebar.")
     st.stop()
 
 # ------------------------------------------------------------
-# File format detection
+# Detect the uploaded file format.
+#
+# Supported:
+#   *.csv
+#   *.csv.gz
+#
+# CSV.GZ is read directly by pandas; no manual unzip/extract
+# step is required.
 # ------------------------------------------------------------
-# CSV.GZ is read directly from memory; no manual extraction is needed.
-# We validate the extension so a generic .gz file is not accepted
-# accidentally.
-uploaded_name = uploaded_csv.name.lower()
+uploaded_name = uploaded_csv.name.lower().strip()
 
 if uploaded_name.endswith(".csv.gz"):
     input_compression = "gzip"
@@ -1047,24 +1084,19 @@ elif uploaded_name.endswith(".csv"):
     input_compression = None
 else:
     st.error(
-        "Unsupported file format. Please upload a .csv or .csv.gz file."
+        "Unsupported file format. "
+        "Please upload a .csv or .csv.gz file."
     )
     st.stop()
 
 
 @st.cache_data(show_spinner=False)
-def get_csv_headers(file_bytes, compression):
+def get_csv_headers(file_bytes, compression=None):
     """Read only the CSV header once and cache it."""
-    read_kwargs = {
-        "nrows": 0,
-    }
-
-    if compression is not None:
-        read_kwargs["compression"] = compression
-
     header_df = pd.read_csv(
         io.BytesIO(file_bytes),
-        **read_kwargs,
+        compression=compression,
+        nrows=0,
     )
     return tuple(
         str(column).strip()
@@ -1089,18 +1121,16 @@ def load_and_prepare_csv(
 
     Streamlit caches this result, so sidebar changes do not force
     the CSV parsing and mapping work to run again.
+
+    compression:
+        None   -> normal .csv
+        gzip   -> .csv.gz
     """
-    read_kwargs = {
-        "usecols": list(usecols),
-        "low_memory": False,
-    }
-
-    if compression is not None:
-        read_kwargs["compression"] = compression
-
     frame = pd.read_csv(
         io.BytesIO(file_bytes),
-        **read_kwargs,
+        compression=compression,
+        usecols=list(usecols),
+        low_memory=False,
     )
 
     frame.columns = [
@@ -1166,11 +1196,12 @@ def load_and_prepare_csv(
         .str.strip()
     )
 
-    frame["_Cell_Display"] = (
-        frame[cell_column]
-        .fillna("")
-        .astype(str)
-        .str.strip()
+    # Normalize Cell Name once at ingestion time.
+    # This prevents Plotly from creating two traces for the same cell
+    # when the raw CSV contains hidden Unicode characters, NBSPs,
+    # repeated spaces, or case differences.
+    frame["_Cell_Display"] = frame[cell_column].apply(
+        normalize_cell_name
     )
 
     return frame
@@ -1180,11 +1211,15 @@ def load_and_prepare_csv(
 # Bytes give Streamlit a stable, cacheable input for the same file.
 file_bytes = uploaded_csv.getvalue()
 
+st.sidebar.caption(
+    f"Loaded format: {'CSV.GZ (gzip)' if input_compression == 'gzip' else 'CSV'}"
+)
+
 with st.spinner("Preparing KPI CSV..."):
 
     csv_headers = get_csv_headers(
         file_bytes,
-        input_compression,
+        compression=input_compression,
     )
 
     header_frame = pd.DataFrame(
@@ -1321,7 +1356,7 @@ with st.spinner("Preparing KPI CSV..."):
         localcell_col,
         date_col,
         time_col,
-        input_compression,
+        compression=input_compression,
     )
 
 # ============================================================
@@ -2260,10 +2295,16 @@ for kpi_name in main_chart_kpis:
 
                 grouped = (
                     pd.DataFrame({
-                        "_Cell_Display": sector_df["_Cell_Display"].astype(str),
+                        "_Cell_Display": sector_df["_Cell_Display"].apply(
+                            normalize_cell_name
+                        ),
                         "_Value": values,
                     })
-                    .groupby("_Cell_Display", as_index=False)["_Value"]
+                    .groupby(
+                        "_Cell_Display",
+                        as_index=False,
+                        dropna=False,
+                    )["_Value"]
                     .sum()
                 )
                 grouped["_TA_Range"] = ta_ranges[idx]
@@ -2365,9 +2406,31 @@ for kpi_name in main_chart_kpis:
             .groupby(
                 ["_Chart_Date", "_Cell_Display"],
                 as_index=False,
+                dropna=False,
             )["_KPI_Value"]
             .mean()
-            .sort_values("_Chart_Date")
+            .sort_values(
+                ["_Chart_Date", "_Cell_Display"]
+            )
+        )
+
+        # Final safety guard: one normalized Cell Name = one series.
+        plot_df["_Cell_Display"] = (
+            plot_df["_Cell_Display"]
+            .map(normalize_cell_name)
+        )
+
+        plot_df = (
+            plot_df
+            .groupby(
+                ["_Chart_Date", "_Cell_Display"],
+                as_index=False,
+                dropna=False,
+            )["_KPI_Value"]
+            .mean()
+            .sort_values(
+                ["_Chart_Date", "_Cell_Display"]
+            )
         )
 
         # Preserve the existing hourly outage behavior.
@@ -2522,9 +2585,31 @@ for kpi_name in main_chart_kpis:
             .groupby(
                 ["_Chart_Date", "_Cell_Display"],
                 as_index=False,
+                dropna=False,
             )["_KPI_Value"]
             .mean()
-            .sort_values("_Chart_Date")
+            .sort_values(
+                ["_Chart_Date", "_Cell_Display"]
+            )
+        )
+
+        # Final safety guard: one normalized Cell Name = one series.
+        plot_df["_Cell_Display"] = (
+            plot_df["_Cell_Display"]
+            .map(normalize_cell_name)
+        )
+
+        plot_df = (
+            plot_df
+            .groupby(
+                ["_Chart_Date", "_Cell_Display"],
+                as_index=False,
+                dropna=False,
+            )["_KPI_Value"]
+            .mean()
+            .sort_values(
+                ["_Chart_Date", "_Cell_Display"]
+            )
         )
 
         # --------------------------------------------------------
@@ -3674,8 +3759,7 @@ def render_configurable_kpi_analysis():
     if analysis_scope == "Cell Level":
         work["_Analysis_Cell"] = (
             analysis_df["_Cell_Display"]
-            .astype(str)
-            .str.strip()
+            .apply(normalize_cell_name)
             .values
         )
         custom_df = (
@@ -5133,3 +5217,4 @@ if _download_figures:
             mime="application/zip",
             use_container_width=False,
         )
+
