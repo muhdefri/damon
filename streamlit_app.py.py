@@ -4047,152 +4047,303 @@ def render_kpi_status_transition():
             ]
         )
 
-        # IMPORTANT:
-        # The combo chart must use the KPIs selected in "KPIs to Compare",
-        # NOT only the KPIs that happen to be Not Meet in the current
-        # transition table.
-        #
-        # Example:
-        #   KPIs to Compare = 4G Cell Availability + SSSR
-        #   Primary = 4G Cell Availability
-        #   Counter = SSSR
-        #
-        # Even if Availability is currently Meet, it must still be available
-        # as a counter/primary KPI for investigation.
-        scope_kpis = [
-            k for k in transition_kpis
-            if k in kpi_actual_columns
-        ]
+    # IMPORTANT:
+    # The combo chart must use the KPIs selected in "KPIs to Compare",
+    # NOT only the KPIs that happen to be Not Meet in the current
+    # transition table.
+    #
+    # Example:
+    #   KPIs to Compare = 4G Cell Availability + SSSR
+    #   Primary = 4G Cell Availability
+    #   Counter = SSSR
+    #
+    # Even if Availability is currently Meet, it must still be available
+    # as a counter/primary KPI for investigation.
+    scope_kpis = [
+        k for k in transition_kpis
+        if k in kpi_actual_columns
+    ]
 
-        def build_scope_history(target_rows, kpi_name):
-            actual_col = kpi_actual_columns.get(kpi_name)
-            if not actual_col or actual_col not in source_df.columns:
-                return pd.DataFrame()
+    def build_scope_history(target_rows, kpi_name):
+        actual_col = kpi_actual_columns.get(kpi_name)
+        if not actual_col or actual_col not in source_df.columns:
+            return pd.DataFrame()
 
-            parts = []
+        parts = []
 
-            for _, target in target_rows.iterrows():
-                target_mask = (
-                    source_df["_Cell_Display"]
-                    .astype(str).str.strip()
-                    .eq(str(target["_Cell_Display"]).strip())
-                    & source_df["_Site_ID_Search"]
-                    .astype(str).str.strip()
-                    .eq(str(target["_Site_ID_Search"]).strip())
-                    & source_df["_FreqBand"]
-                    .astype(str).str.strip().str.upper()
-                    .eq(str(target["_FreqBand"]).strip().upper())
+        for _, target in target_rows.iterrows():
+            target_mask = (
+                source_df["_Cell_Display"]
+                .astype(str).str.strip()
+                .eq(str(target["_Cell_Display"]).strip())
+                & source_df["_Site_ID_Search"]
+                .astype(str).str.strip()
+                .eq(str(target["_Site_ID_Search"]).strip())
+                & source_df["_FreqBand"]
+                .astype(str).str.strip().str.upper()
+                .eq(str(target["_FreqBand"]).strip().upper())
+            )
+
+            h = source_df.loc[
+                target_mask,
+                [
+                    "_Date",
+                    "_Cell_Display",
+                    "_Site_ID_Search",
+                    actual_col,
+                ],
+            ].copy()
+
+            if h.empty:
+                continue
+
+            h["Value"] = pd.to_numeric(h[actual_col], errors="coerce")
+            h["_Date"] = pd.to_datetime(h["_Date"], errors="coerce")
+            h = h.dropna(subset=["_Date", "Value"])
+
+            if h.empty:
+                continue
+
+            h["Cell Name"] = h["_Cell_Display"].astype(str)
+            h["Legend"] = (
+                h["_Cell_Display"].astype(str)
+                + " | "
+                + h["_Site_ID_Search"].astype(str)
+            )
+            parts.append(
+                h[["_Date", "Cell Name", "Legend", "Value"]]
+            )
+
+        return (
+            pd.concat(parts, ignore_index=True)
+            if parts
+            else pd.DataFrame()
+        )
+
+    if not scope_kpis:
+        st.info(
+            "No KPI trend data is available for the selected target."
+        )
+    else:
+        # One independent chart per KPI, preserving the user's KPI
+        # selection and keeping Cell Name as the trace identity.
+        for kpi_name in sorted(scope_kpis):
+            trend_df = build_scope_history(
+                selected_scope,
+                kpi_name,
+            )
+
+            if trend_df.empty:
+                continue
+
+            fig_selected = go.Figure()
+
+            for legend_name in sorted(
+                trend_df["Legend"].dropna().unique()
+            ):
+                h = trend_df[
+                    trend_df["Legend"].eq(legend_name)
+                ].sort_values("_Date")
+
+                cell_name = str(h["Cell Name"].iloc[0])
+
+                fig_selected.add_trace(
+                    go.Scatter(
+                        x=h["_Date"],
+                        y=h["Value"],
+                        mode="lines+markers",
+                        name=cell_name,
+                        line=dict(width=2.5),
+                        marker=dict(size=4),
+                        connectgaps=True,
+                    )
                 )
 
-                h = source_df.loc[
-                    target_mask,
-                    [
-                        "_Date",
-                        "_Cell_Display",
-                        "_Site_ID_Search",
-                        actual_col,
-                    ],
-                ].copy()
+            target_match = target_df[
+                target_df["KPI"].eq(kpi_name)
+            ]
 
-                if h.empty:
-                    continue
-
-                h["Value"] = pd.to_numeric(h[actual_col], errors="coerce")
-                h["_Date"] = pd.to_datetime(h["_Date"], errors="coerce")
-                h = h.dropna(subset=["_Date", "Value"])
-
-                if h.empty:
-                    continue
-
-                h["Cell Name"] = h["_Cell_Display"].astype(str)
-                h["Legend"] = (
-                    h["_Cell_Display"].astype(str)
-                    + " | "
-                    + h["_Site_ID_Search"].astype(str)
-                )
-                parts.append(
-                    h[["_Date", "Cell Name", "Legend", "Value"]]
+            if not target_match.empty:
+                target_value = float(
+                    target_match["Target"].iloc[0]
                 )
 
-            return (
-                pd.concat(parts, ignore_index=True)
-                if parts
+                fig_selected.add_trace(
+                    go.Scatter(
+                        x=[
+                            trend_df["_Date"].min(),
+                            trend_df["_Date"].max(),
+                        ],
+                        y=[target_value, target_value],
+                        mode="lines",
+                        name=f"Target ({target_value:g})",
+                        line=dict(
+                            dash="dot",
+                            width=2,
+                        ),
+                    )
+                )
+
+            fig_selected.update_layout(
+                title=f"{kpi_name} — Cell Name Trend",
+                height=560,
+                template="plotly_white",
+                margin=dict(
+                    l=60,
+                    r=30,
+                    t=65,
+                    b=135,
+                ),
+                hovermode="x unified",
+                xaxis=dict(
+                    title="Date",
+                    tickformat="%d-%b-%y",
+                ),
+                yaxis=dict(
+                    title=kpi_name,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.24,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+
+            show_chart(
+                fig_selected,
+                use_container_width=True,
+            )
+
+        # Generic combo chart for the selected target scope.
+        # This remains available even when the current transition is
+        # Remain Meet, because it is for investigation.
+        if selected_target_labels and len(scope_kpis) >= 1:
+            st.markdown("#### 🔬 KPI Correlation — Selected Cell/Site")
+            st.caption(
+                "Problem Cell / Site selection controls this correlation chart. "
+                "Primary KPI comes from KPIs to Compare. Counter KPI can be "
+                "any available KPI, so you can correlate RANK2/SSSR/Availability "
+                "with Average TA, CQI, PRB, Payload, etc."
+            )
+
+            primary_options = scope_kpis
+            primary_kpi = st.selectbox(
+                "Primary KPI",
+                primary_options,
+                key="selected_scope_primary_kpi_v41",
+            )
+
+            # Counter KPI is independent from the Before/After KPI
+            # selection. It can be ANY KPI available in the dataset.
+            counter_candidates = [
+                k for k in available_kpis
+                if k in kpi_actual_columns and k != primary_kpi
+            ]
+
+            counter_options = ["None"] + counter_candidates
+
+            # Keep Average TA as the preferred default when available.
+            counter_default = 0
+            if "Average TA" in counter_candidates:
+                counter_default = counter_options.index("Average TA")
+
+            counter_kpi = st.selectbox(
+                "Counter KPI",
+                counter_options,
+                index=counter_default,
+                key="selected_scope_counter_kpi_v41",
+                help=(
+                    "Choose any available KPI to compare with the "
+                    "Primary KPI. It does not need to be selected "
+                    "in KPIs to Compare."
+                ),
+            )
+
+            primary_history = build_scope_history(
+                selected_scope,
+                primary_kpi,
+            )
+
+            counter_history = (
+                build_scope_history(
+                    selected_scope,
+                    counter_kpi,
+                )
+                if counter_kpi != "None"
                 else pd.DataFrame()
             )
 
-        if not scope_kpis:
-            st.info(
-                "No KPI trend data is available for the selected target."
-            )
-        else:
-            # One independent chart per KPI, preserving the user's KPI
-            # selection and keeping Cell Name as the trace identity.
-            for kpi_name in sorted(scope_kpis):
-                trend_df = build_scope_history(
-                    selected_scope,
-                    kpi_name,
-                )
-
-                if trend_df.empty:
-                    continue
-
-                fig_selected = go.Figure()
+            if not primary_history.empty:
+                fig_corr = go.Figure()
 
                 for legend_name in sorted(
-                    trend_df["Legend"].dropna().unique()
+                    primary_history["Legend"].dropna().unique()
                 ):
-                    h = trend_df[
-                        trend_df["Legend"].eq(legend_name)
+                    p = primary_history[
+                        primary_history["Legend"].eq(legend_name)
                     ].sort_values("_Date")
 
-                    cell_name = str(h["Cell Name"].iloc[0])
+                    cell_name = str(p["Cell Name"].iloc[0])
 
-                    fig_selected.add_trace(
+                    fig_corr.add_trace(
                         go.Scatter(
-                            x=h["_Date"],
-                            y=h["Value"],
+                            x=p["_Date"],
+                            y=p["Value"],
                             mode="lines+markers",
-                            name=cell_name,
-                            line=dict(width=2.5),
-                            marker=dict(size=4),
-                            connectgaps=True,
-                        )
-                    )
-
-                target_match = target_df[
-                    target_df["KPI"].eq(kpi_name)
-                ]
-
-                if not target_match.empty:
-                    target_value = float(
-                        target_match["Target"].iloc[0]
-                    )
-
-                    fig_selected.add_trace(
-                        go.Scatter(
-                            x=[
-                                trend_df["_Date"].min(),
-                                trend_df["_Date"].max(),
-                            ],
-                            y=[target_value, target_value],
-                            mode="lines",
-                            name=f"Target ({target_value:g})",
+                            name=f"{primary_kpi} — {cell_name}",
                             line=dict(
-                                dash="dot",
-                                width=2,
+                                color="#4472C4",
+                                width=2.5,
                             ),
+                            marker=dict(size=4),
+                            yaxis="y",
                         )
                     )
 
-                fig_selected.update_layout(
-                    title=f"{kpi_name} — Cell Name Trend",
+                    if not counter_history.empty:
+                        c = counter_history[
+                            counter_history["Legend"].eq(legend_name)
+                        ].sort_values("_Date")
+
+                        if not c.empty:
+                            fig_corr.add_trace(
+                                go.Scatter(
+                                    x=c["_Date"],
+                                    y=c["Value"],
+                                    mode="lines+markers",
+                                    name=f"{counter_kpi} — {cell_name}",
+                                    line=dict(
+                                        color="#ED7D31",
+                                        width=2,
+                                        dash="dash",
+                                    ),
+                                    marker=dict(
+                                        size=3,
+                                        symbol="circle-open",
+                                    ),
+                                    yaxis="y2",
+                                )
+                            )
+
+                fig_corr.update_layout(
+                    title=(
+                        f"{primary_kpi}"
+                        + (
+                            f" vs {counter_kpi}"
+                            if counter_kpi != "None"
+                            else ""
+                        )
+                        + " — Selected Cell/Site"
+                    ),
                     height=560,
                     template="plotly_white",
                     margin=dict(
-                        l=60,
-                        r=30,
+                        l=65,
+                        r=75,
                         t=65,
-                        b=135,
+                        b=145,
                     ),
                     hovermode="x unified",
                     xaxis=dict(
@@ -4200,195 +4351,44 @@ def render_kpi_status_transition():
                         tickformat="%d-%b-%y",
                     ),
                     yaxis=dict(
-                        title=kpi_name,
+                        title=primary_kpi,
+                        side="left",
+                    ),
+                    yaxis2=dict(
+                        title=counter_kpi
+                        if counter_kpi != "None"
+                        else "",
+                        side="right",
+                        overlaying="y",
+                        showticklabels=(counter_kpi != "None"),
                     ),
                     legend=dict(
                         orientation="h",
                         yanchor="top",
-                        y=-0.24,
+                        y=-0.25,
                         xanchor="center",
                         x=0.5,
                     ),
                 )
 
                 show_chart(
-                    fig_selected,
+                    fig_corr,
                     use_container_width=True,
                 )
 
-            # Generic combo chart for the selected target scope.
-            # This remains available even when the current transition is
-            # Remain Meet, because it is for investigation.
-            if selected_target_labels and len(scope_kpis) >= 1:
-                st.markdown("#### 🔬 KPI Correlation — Selected Cell/Site")
-                st.caption(
-                    "Problem Cell / Site selection controls this correlation chart. "
-                    "Primary KPI comes from KPIs to Compare. Counter KPI can be "
-                    "any available KPI, so you can correlate RANK2/SSSR/Availability "
-                    "with Average TA, CQI, PRB, Payload, etc."
-                )
-
-                primary_options = scope_kpis
-                primary_kpi = st.selectbox(
-                    "Primary KPI",
-                    primary_options,
-                    key="selected_scope_primary_kpi_v41",
-                )
-
-                # Counter KPI is independent from the Before/After KPI
-                # selection. It can be ANY KPI available in the dataset.
-                counter_candidates = [
-                    k for k in available_kpis
-                    if k in kpi_actual_columns and k != primary_kpi
-                ]
-
-                counter_options = ["None"] + counter_candidates
-
-                # Keep Average TA as the preferred default when available.
-                counter_default = 0
-                if "Average TA" in counter_candidates:
-                    counter_default = counter_options.index("Average TA")
-
-                counter_kpi = st.selectbox(
-                    "Counter KPI",
-                    counter_options,
-                    index=counter_default,
-                    key="selected_scope_counter_kpi_v41",
-                    help=(
-                        "Choose any available KPI to compare with the "
-                        "Primary KPI. It does not need to be selected "
-                        "in KPIs to Compare."
-                    ),
-                )
-
-                primary_history = build_scope_history(
-                    selected_scope,
-                    primary_kpi,
-                )
-
-                counter_history = (
-                    build_scope_history(
-                        selected_scope,
-                        counter_kpi,
+                if counter_kpi == "None":
+                    st.caption(
+                        f"Blue solid = {primary_kpi} | "
+                        "Counter KPI = None | "
+                        "Cell Name shown in legend"
                     )
-                    if counter_kpi != "None"
-                    else pd.DataFrame()
-                )
-
-                if not primary_history.empty:
-                    fig_corr = go.Figure()
-
-                    for legend_name in sorted(
-                        primary_history["Legend"].dropna().unique()
-                    ):
-                        p = primary_history[
-                            primary_history["Legend"].eq(legend_name)
-                        ].sort_values("_Date")
-
-                        cell_name = str(p["Cell Name"].iloc[0])
-
-                        fig_corr.add_trace(
-                            go.Scatter(
-                                x=p["_Date"],
-                                y=p["Value"],
-                                mode="lines+markers",
-                                name=f"{primary_kpi} — {cell_name}",
-                                line=dict(
-                                    color="#4472C4",
-                                    width=2.5,
-                                ),
-                                marker=dict(size=4),
-                                yaxis="y",
-                            )
-                        )
-
-                        if not counter_history.empty:
-                            c = counter_history[
-                                counter_history["Legend"].eq(legend_name)
-                            ].sort_values("_Date")
-
-                            if not c.empty:
-                                fig_corr.add_trace(
-                                    go.Scatter(
-                                        x=c["_Date"],
-                                        y=c["Value"],
-                                        mode="lines+markers",
-                                        name=f"{counter_kpi} — {cell_name}",
-                                        line=dict(
-                                            color="#ED7D31",
-                                            width=2,
-                                            dash="dash",
-                                        ),
-                                        marker=dict(
-                                            size=3,
-                                            symbol="circle-open",
-                                        ),
-                                        yaxis="y2",
-                                    )
-                                )
-
-                    fig_corr.update_layout(
-                        title=(
-                            f"{primary_kpi}"
-                            + (
-                                f" vs {counter_kpi}"
-                                if counter_kpi != "None"
-                                else ""
-                            )
-                            + " — Selected Cell/Site"
-                        ),
-                        height=560,
-                        template="plotly_white",
-                        margin=dict(
-                            l=65,
-                            r=75,
-                            t=65,
-                            b=145,
-                        ),
-                        hovermode="x unified",
-                        xaxis=dict(
-                            title="Date",
-                            tickformat="%d-%b-%y",
-                        ),
-                        yaxis=dict(
-                            title=primary_kpi,
-                            side="left",
-                        ),
-                        yaxis2=dict(
-                            title=counter_kpi
-                            if counter_kpi != "None"
-                            else "",
-                            side="right",
-                            overlaying="y",
-                            showticklabels=(counter_kpi != "None"),
-                        ),
-                        legend=dict(
-                            orientation="h",
-                            yanchor="top",
-                            y=-0.25,
-                            xanchor="center",
-                            x=0.5,
-                        ),
+                else:
+                    st.caption(
+                        f"Blue solid = {primary_kpi} | "
+                        f"Orange dashed = {counter_kpi} | "
+                        f"Left axis = {primary_kpi} | "
+                        f"Right axis = {counter_kpi}"
                     )
-
-                    show_chart(
-                        fig_corr,
-                        use_container_width=True,
-                    )
-
-                    if counter_kpi == "None":
-                        st.caption(
-                            f"Blue solid = {primary_kpi} | "
-                            "Counter KPI = None | "
-                            "Cell Name shown in legend"
-                        )
-                    else:
-                        st.caption(
-                            f"Blue solid = {primary_kpi} | "
-                            f"Orange dashed = {counter_kpi} | "
-                            f"Left axis = {primary_kpi} | "
-                            f"Right axis = {counter_kpi}"
-                        )
 
     return
 
