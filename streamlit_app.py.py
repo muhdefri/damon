@@ -4299,20 +4299,46 @@ def render_kpi_status_transition():
 
                     cell_name = str(p["Cell Name"].iloc[0])
 
-                    fig_corr.add_trace(
-                        go.Scatter(
-                            x=p["_Date"],
-                            y=p["Value"],
-                            mode="lines+markers",
-                            name=f"{primary_kpi} — {cell_name}",
-                            line=dict(
-                                color="#4472C4",
-                                width=2.5,
-                            ),
-                            marker=dict(size=4),
-                            yaxis="y",
+                    # Keep Cell Name visually readable in the legend.
+                    # The KPI is appended after a clear separator so the
+                    # cell identifier remains easy to scan.
+                    primary_is_payload = "payload" in str(primary_kpi).lower()
+
+                    if primary_is_payload:
+                        # Payload is shown as a filled "hill" / area style
+                        # when it participates in a combo analysis.
+                        fig_corr.add_trace(
+                            go.Scatter(
+                                x=p["_Date"],
+                                y=p["Value"],
+                                mode="lines",
+                                name=f"{cell_name}  |  {primary_kpi}",
+                                line=dict(
+                                    color="#4472C4",
+                                    width=2.8,
+                                ),
+                                fill="tozeroy",
+                                fillcolor="rgba(68,114,196,0.22)",
+                                yaxis="y",
+                                legendgroup=cell_name,
+                            )
                         )
-                    )
+                    else:
+                        fig_corr.add_trace(
+                            go.Scatter(
+                                x=p["_Date"],
+                                y=p["Value"],
+                                mode="lines+markers",
+                                name=f"{cell_name}  |  {primary_kpi}",
+                                line=dict(
+                                    color="#4472C4",
+                                    width=2.5,
+                                ),
+                                marker=dict(size=4),
+                                yaxis="y",
+                                legendgroup=cell_name,
+                            )
+                        )
 
                     if not counter_history.empty:
                         c = counter_history[
@@ -4320,24 +4346,48 @@ def render_kpi_status_transition():
                         ].sort_values("_Date")
 
                         if not c.empty:
-                            fig_corr.add_trace(
-                                go.Scatter(
-                                    x=c["_Date"],
-                                    y=c["Value"],
-                                    mode="lines+markers",
-                                    name=f"{counter_kpi} — {cell_name}",
-                                    line=dict(
-                                        color="#ED7D31",
-                                        width=2,
-                                        dash="dash",
-                                    ),
-                                    marker=dict(
-                                        size=3,
-                                        symbol="circle-open",
-                                    ),
-                                    yaxis="y2",
+                            counter_is_payload = "payload" in str(counter_kpi).lower()
+
+                            if counter_is_payload:
+                                # Payload gets a filled area ("hill") so
+                                # traffic volume is immediately distinguishable
+                                # from the primary KPI line.
+                                fig_corr.add_trace(
+                                    go.Scatter(
+                                        x=c["_Date"],
+                                        y=c["Value"],
+                                        mode="lines",
+                                        name=f"{cell_name}  |  {counter_kpi}",
+                                        line=dict(
+                                            color="#ED7D31",
+                                            width=2.8,
+                                        ),
+                                        fill="tozeroy",
+                                        fillcolor="rgba(237,125,49,0.22)",
+                                        yaxis="y2",
+                                        legendgroup=cell_name,
+                                    )
                                 )
-                            )
+                            else:
+                                fig_corr.add_trace(
+                                    go.Scatter(
+                                        x=c["_Date"],
+                                        y=c["Value"],
+                                        mode="lines+markers",
+                                        name=f"{cell_name}  |  {counter_kpi}",
+                                        line=dict(
+                                            color="#ED7D31",
+                                            width=2,
+                                            dash="dash",
+                                        ),
+                                        marker=dict(
+                                            size=3,
+                                            symbol="circle-open",
+                                        ),
+                                        yaxis="y2",
+                                        legendgroup=cell_name,
+                                    )
+                                )
 
                 fig_corr.update_layout(
                     title=(
@@ -4351,16 +4401,28 @@ def render_kpi_status_transition():
                     ),
                     height=560,
                     template="plotly_white",
+                    # Keep the chart visually tight to the left/right edges.
+                    # The extra space is reserved mainly below for the readable
+                    # Cell Name legend.
                     margin=dict(
-                        l=65,
-                        r=75,
+                        l=42,
+                        r=42,
                         t=65,
-                        b=145,
+                        b=175,
                     ),
                     hovermode="x unified",
                     xaxis=dict(
                         title="Date",
                         tickformat="%d-%b-%y",
+                        range=(
+                            [
+                                primary_history["_Date"].min(),
+                                primary_history["_Date"].max(),
+                            ]
+                            if not primary_history.empty
+                            else None
+                        ),
+                        automargin=True,
                     ),
                     yaxis=dict(
                         title=primary_kpi,
@@ -4375,11 +4437,24 @@ def render_kpi_status_transition():
                         showticklabels=(counter_kpi != "None"),
                     ),
                     legend=dict(
+                        title=dict(
+                            text="Cell Name  |  KPI",
+                            font=dict(
+                                size=10,
+                            ),
+                        ),
                         orientation="h",
                         yanchor="top",
-                        y=-0.25,
+                        y=-0.29,
                         xanchor="center",
                         x=0.5,
+                        font=dict(
+                            size=10,
+                        ),
+                        entrywidth=260,
+                        entrywidthmode="pixels",
+                        traceorder="normal",
+                        itemsizing="constant",
                     ),
                 )
 
