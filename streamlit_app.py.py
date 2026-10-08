@@ -4720,6 +4720,271 @@ def render_configurable_kpi_analysis():
             ),
         )
 
+
+    # ============================================================
+    # KPI RESULT SUMMARY — THRESHOLD / MEET / NOT MEET
+    # ============================================================
+    #
+    # Keep the summary visually close to the user's Excel layout:
+    #   eNodeB Name | Cell Name | LocalCell Id | Remark |
+    #   Date | Sector | FreqBand | KPI | Threshold
+    #
+    # Site ID is intentionally removed from the displayed summary.
+    # The Remark column occupies that position, while Threshold is
+    # shown immediately beside the KPI value for quick RNO checking.
+    # ============================================================
+
+    summary_actual_col = kpi_actual_columns.get(primary_kpi)
+
+    if summary_actual_col and summary_actual_col in analysis_df.columns:
+
+        summary_source = analysis_df.copy()
+
+        summary_source["_KPI_Result_Value"] = parse_kpi_numeric(
+            summary_source[summary_actual_col]
+        )
+
+        summary_source["_Summary_Date"] = (
+            summary_source["_Date"].dt.normalize()
+        )
+
+        # KPI direction:
+        # Higher is better for accessibility, availability, mobility,
+        # throughput, CQI, etc.
+        #
+        # Lower is better for drop, failure, utilization, latency,
+        # TA, packet loss, and interference-style KPIs.
+        lower_is_better_keywords = (
+            "DROP",
+            "FAIL",
+            "ABNORMAL RELEASE",
+            "PRB",
+            "LATENCY",
+            "PACKET LOSS",
+            "AVERAGE TA",
+            "TA DISTRIBUTION",
+            "INTERFERENCE",
+            "LAST TTI",
+        )
+
+        primary_upper = primary_kpi.upper()
+
+        lower_is_better = any(
+            keyword in primary_upper
+            for keyword in lower_is_better_keywords
+        )
+
+        if primary_upper == "PAYLOAD":
+            lower_is_better = False
+
+        # --------------------------------------------------------
+        # Build the grouping grain.
+        #
+        # Cell Level:
+        #   one row = Date + Cell + Sector + FreqBand
+        #
+        # Site Level:
+        #   one row = Date + FreqBand
+        # --------------------------------------------------------
+        summary_group_cols = [
+            "_Summary_Date",
+            enodeb_col,
+        ]
+
+        if analysis_scope == "Cell Level":
+            summary_group_cols.extend([
+                "_Cell_Display",
+                localcell_col,
+                "_Sector_Display",
+                "_FreqBand",
+            ])
+        else:
+            summary_group_cols.extend([
+                "_FreqBand",
+            ])
+
+        summary_group_cols = [
+            col
+            for col in summary_group_cols
+            if col in summary_source.columns
+        ]
+
+        # Use the same aggregation convention as the KPI Analysis chart.
+        if primary_upper == "PAYLOAD":
+            summary_agg = "sum"
+        elif primary_upper == "LAST TTI RATIO":
+            summary_agg = "max"
+        else:
+            summary_agg = "mean"
+
+        summary_df = (
+            summary_source
+            .dropna(subset=["_KPI_Result_Value"])
+            .groupby(
+                summary_group_cols,
+                as_index=False,
+                dropna=False,
+            )["_KPI_Result_Value"]
+            .agg(summary_agg)
+            .rename(
+                columns={
+                    "_KPI_Result_Value": primary_kpi,
+                    "_Summary_Date": "Date",
+                    "_Cell_Display": "Cell Name",
+                    "_Sector_Display": "Sector",
+                    "_FreqBand": "FreqBand",
+                    enodeb_col: "eNodeB Name",
+                    localcell_col: "LocalCell Id",
+                }
+            )
+        )
+
+        if not summary_df.empty:
+
+            # Evaluate Meet / Not Meet using the exact aggregated KPI
+            # value displayed in the summary.
+            if lower_is_better:
+                summary_df["Remark"] = summary_df[primary_kpi].apply(
+                    lambda value: (
+                        "Meet"
+                        if pd.notna(value)
+                        and value <= float(threshold)
+                        else "Not Meet"
+                    )
+                )
+            else:
+                summary_df["Remark"] = summary_df[primary_kpi].apply(
+                    lambda value: (
+                        "Meet"
+                        if pd.notna(value)
+                        and value >= float(threshold)
+                        else "Not Meet"
+                    )
+                )
+
+            # ----------------------------------------------------
+            # Excel-style display requested by the user.
+            #
+            # Site ID is deliberately NOT displayed.
+            # Remark replaces the Site ID position.
+            # Threshold is placed immediately after the KPI value.
+            # ----------------------------------------------------
+            summary_df["Threshold"] = float(threshold)
+
+            preferred_summary_cols = [
+                "eNodeB Name",
+                "Cell Name",
+                "LocalCell Id",
+                "Date",
+                "Sector",
+                "FreqBand",
+                primary_kpi,
+                "Remark",
+                "Threshold",
+            ]
+
+            summary_cols = [
+                col
+                for col in preferred_summary_cols
+                if col in summary_df.columns
+            ]
+
+            summary_df = summary_df[summary_cols].sort_values(
+                [
+                    col
+                    for col in [
+                        "Date",
+                        "Sector",
+                        "FreqBand",
+                        "Cell Name",
+                    ]
+                    if col in summary_df.columns
+                ]
+            )
+
+            # Clean Excel-like numeric display.
+            if primary_kpi in summary_df.columns:
+                summary_df[primary_kpi] = pd.to_numeric(
+                    summary_df[primary_kpi],
+                    errors="coerce",
+                ).round(4)
+
+            summary_df["Threshold"] = pd.to_numeric(
+                summary_df["Threshold"],
+                errors="coerce",
+            ).round(4)
+
+            meet_count = int(
+                (summary_df["Remark"] == "Meet").sum()
+            )
+            not_meet_count = int(
+                (summary_df["Remark"] == "Not Meet").sum()
+            )
+            total_count = len(summary_df)
+
+            st.markdown("### 📋 KPI Result Summary")
+
+            summary_metric_1, summary_metric_2, summary_metric_3 = st.columns(3)
+
+            summary_metric_1.metric(
+                "Meet",
+                f"{meet_count:,}",
+            )
+
+            summary_metric_2.metric(
+                "Not Meet",
+                f"{not_meet_count:,}",
+            )
+
+            summary_metric_3.metric(
+                "Total",
+                f"{total_count:,}",
+            )
+
+            comparison_text = (
+                f"{primary_kpi} ≥ {threshold:g}"
+                if not lower_is_better
+                else f"{primary_kpi} ≤ {threshold:g}"
+            )
+
+            st.caption(
+                f"Threshold rule: {comparison_text} = Meet; "
+                f"opposite condition = Not Meet."
+            )
+
+            # Excel-like summary:
+            #   Meet     -> green
+            #   Not Meet -> red
+            #
+            # Only the Remark column is colored so the table remains
+            # clean and easy to scan.
+            def color_kpi_remark(value):
+                if value == "Meet":
+                    return (
+                        "color: #008000; "
+                        "font-weight: 700;"
+                    )
+                if value == "Not Meet":
+                    return (
+                        "color: #FF0000; "
+                        "font-weight: 700;"
+                    )
+                return ""
+
+            styled_summary = (
+                summary_df.style
+                .map(
+                    color_kpi_remark,
+                    subset=["Remark"],
+                )
+            )
+
+            st.dataframe(
+                styled_summary,
+                use_container_width=True,
+                hide_index=True,
+            )
+
     if analysis_scope == "Site Level":
         scope_text = (
             f"Analysis scope: Site Level — {len(analysis_sites)} site(s), "
