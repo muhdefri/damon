@@ -4732,10 +4732,19 @@ def render_configurable_kpi_analysis():
     # ------------------------------------------------------------
     # APPLY CELL MEET / NOT MEET FILTER
     # ------------------------------------------------------------
-    # We classify each Cell Name using the latest available PRIMARY KPI
-    # value in the current filtered analysis period. We then keep the
-    # complete time-series rows for the selected cells so the trend is
-    # not truncated to only the points that meet the threshold.
+    # IMPORTANT: the chart status must use the SAME evaluation period
+    # as the Result Summary. Previously this filter used the latest
+    # single chart point (e.g. 05-Oct), while Compare 2 Dates summary
+    # used the average of Date B range (e.g. 03-Oct -> 05-Oct). That
+    # caused the summary count and chart trace count to differ.
+    #
+    # Rules:
+    #   Daily              -> selected/current analysis day
+    #   Average Date Range -> current analysis date range
+    #   Compare 2 Dates    -> Date B range (the current/latest side)
+    #
+    # After classification, we keep the FULL chart trend for the
+    # selected cells.
     if (
         effective_cell_level
         and "_Analysis_Cell" in custom_df.columns
@@ -4755,36 +4764,92 @@ def render_configurable_kpi_analysis():
             errors="coerce",
         )
 
+        # Restrict status calculation to the same evaluation window
+        # represented by the Result Summary.
+        status_source["_Status_Date"] = pd.to_datetime(
+            status_source["_Chart_Date"],
+            errors="coerce",
+        ).dt.normalize()
+
+        if date_evaluation_mode == "Compare 2 Dates":
+            if compare_date_b is not None and len(compare_date_b) == 2:
+                status_start = pd.Timestamp(
+                    compare_date_b[0]
+                ).normalize()
+                status_end = pd.Timestamp(
+                    compare_date_b[1]
+                ).normalize()
+
+                status_source = status_source[
+                    (
+                        status_source["_Status_Date"]
+                        >= status_start
+                    )
+                    & (
+                        status_source["_Status_Date"]
+                        <= status_end
+                    )
+                ].copy()
+
+        elif date_evaluation_mode == "Average Date Range":
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                status_start = pd.Timestamp(
+                    date_range[0]
+                ).normalize()
+                status_end = pd.Timestamp(
+                    date_range[1]
+                ).normalize()
+
+                status_source = status_source[
+                    (
+                        status_source["_Status_Date"]
+                        >= status_start
+                    )
+                    & (
+                        status_source["_Status_Date"]
+                        <= status_end
+                    )
+                ].copy()
+
+        elif date_evaluation_mode == "Daily":
+            # Daily mode uses the selected/current analysis date range.
+            # If a single date is selected, this naturally becomes
+            # one-day classification.
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                status_start = pd.Timestamp(
+                    date_range[0]
+                ).normalize()
+                status_end = pd.Timestamp(
+                    date_range[1]
+                ).normalize()
+
+                status_source = status_source[
+                    (
+                        status_source["_Status_Date"]
+                        >= status_start
+                    )
+                    & (
+                        status_source["_Status_Date"]
+                        <= status_end
+                    )
+                ].copy()
+
         status_source = status_source.dropna(
             subset=[primary_kpi]
         )
 
         if not status_source.empty:
+            # Use the same aggregation convention as the summary:
+            # average KPI across the selected evaluation window per cell.
             latest_status = (
                 status_source
-                .sort_values(
-                    [
-                        "_Analysis_Cell",
-                        "_Chart_Date",
-                    ]
-                )
                 .groupby(
                     "_Analysis_Cell",
                     as_index=False,
-                )
-                .tail(1)
+                )[primary_kpi]
+                .mean()
             )
 
-            latest_status = latest_status[
-                [
-                    "_Analysis_Cell",
-                    primary_kpi,
-                ]
-            ].copy()
-
-            # Use native pandas instead of np.where().
-            # This dashboard does not import NumPy, and NumPy is not
-            # required for this simple Meet / Not Meet classification.
             latest_status["_Status"] = (
                 latest_status[primary_kpi]
                 .ge(float(threshold))
@@ -4820,18 +4885,27 @@ def render_configurable_kpi_analysis():
             if custom_df.empty:
                 st.info(
                     f"No Cell Name is classified as "
-                    f"'{chart_status_filter}' based on the latest "
-                    f"{primary_kpi} value in the selected analysis period."
+                    f"'{chart_status_filter}' using the same "
+                    f"evaluation period as the KPI Result Summary."
                 )
                 return
+
+            if date_evaluation_mode == "Compare 2 Dates":
+                status_basis = "Date B range"
+            elif date_evaluation_mode == "Average Date Range":
+                status_basis = "Average Date Range"
+            else:
+                status_basis = "Daily evaluation"
 
             st.caption(
                 f"📌 Chart filter: **{chart_status_filter}** — "
                 f"{len(allowed_cells):,} Cell Name(s) shown. "
-                f"Classification uses the latest {primary_kpi} value "
-                f"vs threshold {threshold:g}; the full trend remains visible."
+                f"Classification uses the same KPI evaluation basis "
+                f"as the summary ({status_basis}), threshold {threshold:g}. "
+                "The full trend remains visible."
             )
 
+    # Detect hourly vs daily display.
     # Detect hourly vs daily display.
     if analysis_is_hourly:
         tickformat = "%H:%M<br>%d-%b"
