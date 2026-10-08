@@ -3140,7 +3140,13 @@ def render_kpi_status_transition():
         ),
     )
 
-    source_df = site_level_df.copy()
+    # IMPORTANT:
+    # KPI Status Transition is an independent target-list analysis.
+    # Do NOT use site_level_df here because that dataframe is restricted
+    # by the top "Site Search" field. The pasted Cell + Site + FreqBand
+    # list must be the source of truth, even when the top Site Search
+    # contains a different site.
+    source_df = df.copy()
 
     if source_df.empty:
         st.warning("No data is available for KPI Status Transition.")
@@ -3296,10 +3302,54 @@ def render_kpi_status_transition():
 
         transition_source = source_df[transition_mask].copy()
 
+        # Build a diagnostic table so the user can immediately verify that
+        # every pasted target was found. This is especially important for
+        # large bulk lists.
+        matched_target_keys = set(
+            zip(
+                transition_source["_Cell_Display"]
+                .astype(str)
+                .str.strip()
+                .str.upper(),
+                transition_source["_Site_ID_Search"]
+                .astype(str)
+                .str.strip()
+                .str.upper(),
+                transition_source["_FreqBand"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .map(normalize_transition_band),
+            )
+        )
+
+        unmatched_targets = [
+            target
+            for target in transition_targets
+            if target not in matched_target_keys
+        ]
+
         st.caption(
             "🎯 Exact target mode: "
-            f"{len(transition_targets):,} Cell + Site + FreqBand target(s)."
+            f"**{len(transition_targets):,}** target(s) pasted | "
+            f"**{len(matched_target_keys):,}** target(s) found in data | "
+            f"**{len(unmatched_targets):,}** target(s) not found."
         )
+
+        if unmatched_targets:
+            with st.expander(
+                f"⚠️ Unmatched Targets ({len(unmatched_targets):,})",
+                expanded=False,
+            ):
+                unmatched_df = pd.DataFrame(
+                    unmatched_targets,
+                    columns=["Cell Name", "Site ID", "FreqBand"],
+                )
+                st.dataframe(
+                    unmatched_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
     else:
         transition_source = source_df.copy()
         st.caption(
