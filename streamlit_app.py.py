@@ -3717,6 +3717,114 @@ def render_configurable_kpi_analysis():
     )
 
     # ------------------------------------------------------------
+    # DATE EVALUATION MODE
+    # ------------------------------------------------------------
+    # The KPI chart remains date-by-date, while the Result Summary
+    # can evaluate the KPI over:
+    #   1) Daily              -> one result per date
+    #   2) Average Date Range -> average KPI across the selected range
+    #   3) Compare 2 Dates    -> compare two selected dates side-by-side
+    #
+    # This is useful for RNO checks such as:
+    #   01-Oct to 03-Oct -> average SSSR vs threshold
+    #   01-Sep vs 01-Oct -> KPI result on each date vs threshold
+    # ------------------------------------------------------------
+    st.markdown("**Date Evaluation**")
+
+    date_eval_col, date_a_col, date_b_col = st.columns(
+        [1.8, 1.2, 1.2],
+        gap="small",
+    )
+
+    with date_eval_col:
+        date_evaluation_mode = st.radio(
+            "Evaluation Mode",
+            [
+                "Daily",
+                "Average Date Range",
+                "Compare 2 Dates",
+            ],
+            horizontal=True,
+            key="custom_kpi_analysis_date_mode",
+            help=(
+                "Daily = one result per date. "
+                "Average Date Range = average KPI over the selected "
+                "date range. Compare 2 Dates = compare two dates "
+                "side-by-side against the same threshold."
+            ),
+        )
+
+    available_analysis_dates = sorted(
+        pd.to_datetime(
+            analysis_df["_Date_Day"],
+            errors="coerce",
+        )
+        .dropna()
+        .dt.date
+        .unique()
+    )
+
+    compare_date_a = None
+    compare_date_b = None
+
+    if date_evaluation_mode == "Compare 2 Dates":
+        if len(available_analysis_dates) < 2:
+            st.warning(
+                "Compare 2 Dates requires at least two different dates "
+                "in the current KPI Analysis filter."
+            )
+        else:
+            previous_a = st.session_state.get(
+                "custom_kpi_analysis_compare_date_a"
+            )
+            previous_b = st.session_state.get(
+                "custom_kpi_analysis_compare_date_b"
+            )
+
+            default_a = (
+                previous_a
+                if previous_a in available_analysis_dates
+                else available_analysis_dates[0]
+            )
+            default_b = (
+                previous_b
+                if previous_b in available_analysis_dates
+                else available_analysis_dates[-1]
+            )
+
+            with date_a_col:
+                compare_date_a = st.selectbox(
+                    "Date A",
+                    available_analysis_dates,
+                    index=available_analysis_dates.index(default_a),
+                    format_func=lambda value: value.strftime("%d-%b-%Y"),
+                    key="custom_kpi_analysis_compare_date_a",
+                )
+
+            with date_b_col:
+                compare_date_b = st.selectbox(
+                    "Date B",
+                    available_analysis_dates,
+                    index=available_analysis_dates.index(default_b),
+                    format_func=lambda value: value.strftime("%d-%b-%Y"),
+                    key="custom_kpi_analysis_compare_date_b",
+                )
+
+    st.caption(
+        (
+            "Average Date Range uses the current Analysis Date Range."
+            if date_evaluation_mode == "Average Date Range"
+            else
+            (
+                "Compare Date A vs Date B using the same KPI threshold."
+                if date_evaluation_mode == "Compare 2 Dates"
+                else
+                "Daily evaluation checks each date independently."
+            )
+        )
+    )
+
+    # ------------------------------------------------------------
     # Prepare filtered multi-site / multi-cell time series.
     # ------------------------------------------------------------
     work = analysis_df[["_Date"]].copy()
@@ -4722,16 +4830,23 @@ def render_configurable_kpi_analysis():
 
 
     # ============================================================
-    # KPI RESULT SUMMARY — THRESHOLD / MEET / NOT MEET
+    # KPI RESULT SUMMARY — DATE-AWARE THRESHOLD / MEET / NOT MEET
     # ============================================================
     #
-    # Keep the summary visually close to the user's Excel layout:
-    #   eNodeB Name | Cell Name | LocalCell Id | Remark |
-    #   Date | Sector | FreqBand | KPI | Threshold
+    # Excel-like RNO summary with three evaluation modes:
     #
-    # Site ID is intentionally removed from the displayed summary.
-    # The Remark column occupies that position, while Threshold is
-    # shown immediately beside the KPI value for quick RNO checking.
+    # Daily:
+    #   Date | KPI | Remark | Threshold
+    #
+    # Average Date Range:
+    #   01-Oct -> 03-Oct = average KPI for the selected cell/site
+    #
+    # Compare 2 Dates:
+    #   Date A KPI | Remark A | Date B KPI | Remark B | Threshold
+    #
+    # The summary keeps the same entity grain as the KPI Analysis:
+    # Cell Level  -> Cell Name + LocalCell Id + Sector + FreqBand
+    # Site Level  -> eNodeB Name + FreqBand
     # ============================================================
 
     summary_actual_col = kpi_actual_columns.get(primary_kpi)
@@ -4744,11 +4859,11 @@ def render_configurable_kpi_analysis():
             summary_source[summary_actual_col]
         )
 
-        summary_source["_Summary_Date"] = (
-            summary_source["_Date"].dt.normalize()
-        )
+        summary_source["_Summary_Date"] = pd.to_datetime(
+            summary_source["_Date_Day"],
+            errors="coerce",
+        ).dt.normalize()
 
-        # KPI direction:
         # Higher is better for accessibility, availability, mobility,
         # throughput, CQI, etc.
         #
@@ -4778,38 +4893,39 @@ def render_configurable_kpi_analysis():
             lower_is_better = False
 
         # --------------------------------------------------------
-        # Build the grouping grain.
-        #
-        # Cell Level:
-        #   one row = Date + Cell + Sector + FreqBand
-        #
-        # Site Level:
-        #   one row = Date + FreqBand
+        # Entity/grouping columns.
         # --------------------------------------------------------
-        summary_group_cols = [
-            "_Summary_Date",
+        identity_cols = [
             enodeb_col,
         ]
 
+        rename_map = {
+            enodeb_col: "eNodeB Name",
+            localcell_col: "LocalCell Id",
+            "_Cell_Display": "Cell Name",
+            "_Sector_Display": "Sector",
+            "_FreqBand": "FreqBand",
+        }
+
         if analysis_scope == "Cell Level":
-            summary_group_cols.extend([
+            identity_cols.extend([
                 "_Cell_Display",
                 localcell_col,
                 "_Sector_Display",
                 "_FreqBand",
             ])
         else:
-            summary_group_cols.extend([
+            identity_cols.extend([
                 "_FreqBand",
             ])
 
-        summary_group_cols = [
+        identity_cols = [
             col
-            for col in summary_group_cols
+            for col in identity_cols
             if col in summary_source.columns
         ]
 
-        # Use the same aggregation convention as the KPI Analysis chart.
+        # Same aggregation convention used by KPI Analysis.
         if primary_upper == "PAYLOAD":
             summary_agg = "sum"
         elif primary_upper == "LAST TTI RATIO":
@@ -4817,173 +4933,496 @@ def render_configurable_kpi_analysis():
         else:
             summary_agg = "mean"
 
-        summary_df = (
-            summary_source
-            .dropna(subset=["_KPI_Result_Value"])
-            .groupby(
-                summary_group_cols,
-                as_index=False,
-                dropna=False,
-            )["_KPI_Result_Value"]
-            .agg(summary_agg)
-            .rename(
-                columns={
-                    "_KPI_Result_Value": primary_kpi,
-                    "_Summary_Date": "Date",
-                    "_Cell_Display": "Cell Name",
-                    "_Sector_Display": "Sector",
-                    "_FreqBand": "FreqBand",
-                    enodeb_col: "eNodeB Name",
-                    localcell_col: "LocalCell Id",
-                }
-            )
-        )
+        def evaluate_remark(value):
+            if pd.isna(value):
+                return "No Data"
 
-        if not summary_df.empty:
-
-            # Evaluate Meet / Not Meet using the exact aggregated KPI
-            # value displayed in the summary.
             if lower_is_better:
-                summary_df["Remark"] = summary_df[primary_kpi].apply(
-                    lambda value: (
-                        "Meet"
-                        if pd.notna(value)
-                        and value <= float(threshold)
-                        else "Not Meet"
-                    )
-                )
-            else:
-                summary_df["Remark"] = summary_df[primary_kpi].apply(
-                    lambda value: (
-                        "Meet"
-                        if pd.notna(value)
-                        and value >= float(threshold)
-                        else "Not Meet"
-                    )
+                return (
+                    "Meet"
+                    if float(value) <= float(threshold)
+                    else "Not Meet"
                 )
 
-            # ----------------------------------------------------
-            # Excel-style display requested by the user.
-            #
-            # Site ID is deliberately NOT displayed.
-            # Remark replaces the Site ID position.
-            # Threshold is placed immediately after the KPI value.
-            # ----------------------------------------------------
-            summary_df["Threshold"] = float(threshold)
+            return (
+                "Meet"
+                if float(value) >= float(threshold)
+                else "Not Meet"
+            )
 
-            preferred_summary_cols = [
-                "eNodeB Name",
-                "Cell Name",
-                "LocalCell Id",
-                "Date",
-                "Sector",
-                "FreqBand",
-                primary_kpi,
-                "Remark",
-                "Threshold",
+        def style_remark(value):
+            if value == "Meet":
+                return (
+                    "color: #008000; "
+                    "font-weight: 700;"
+                )
+            if value == "Not Meet":
+                return (
+                    "color: #FF0000; "
+                    "font-weight: 700;"
+                )
+            if value == "No Data":
+                return (
+                    "color: #777777; "
+                    "font-weight: 700;"
+                )
+            return ""
+
+        # --------------------------------------------------------
+        # Aggregate raw data at the requested date level.
+        # --------------------------------------------------------
+        valid_summary_source = summary_source.dropna(
+            subset=[
+                "_Summary_Date",
+                "_KPI_Result_Value",
             ]
+        ).copy()
 
-            summary_cols = [
-                col
-                for col in preferred_summary_cols
-                if col in summary_df.columns
-            ]
+        # --------------------------------------------------------
+        # MODE 1 — DAILY
+        # --------------------------------------------------------
+        if date_evaluation_mode == "Daily":
 
-            summary_df = summary_df[summary_cols].sort_values(
-                [
+            summary_df = (
+                valid_summary_source
+                .groupby(
+                    identity_cols + ["_Summary_Date"],
+                    as_index=False,
+                    dropna=False,
+                )["_KPI_Result_Value"]
+                .agg(summary_agg)
+                .rename(
+                    columns={
+                        "_KPI_Result_Value": primary_kpi,
+                        "_Summary_Date": "Date",
+                        **rename_map,
+                    }
+                )
+            )
+
+            if not summary_df.empty:
+
+                summary_df["Remark"] = summary_df[
+                    primary_kpi
+                ].apply(evaluate_remark)
+
+                summary_df["Threshold"] = float(threshold)
+
+                preferred_summary_cols = [
+                    "eNodeB Name",
+                    "Cell Name",
+                    "LocalCell Id",
+                    "Date",
+                    "Sector",
+                    "FreqBand",
+                    primary_kpi,
+                    "Remark",
+                    "Threshold",
+                ]
+
+                summary_cols = [
                     col
-                    for col in [
-                        "Date",
-                        "Sector",
-                        "FreqBand",
-                        "Cell Name",
-                    ]
+                    for col in preferred_summary_cols
                     if col in summary_df.columns
                 ]
-            )
 
-            # Clean Excel-like numeric display.
-            if primary_kpi in summary_df.columns:
+                summary_df = summary_df[summary_cols].sort_values(
+                    [
+                        col
+                        for col in [
+                            "Date",
+                            "Sector",
+                            "FreqBand",
+                            "Cell Name",
+                        ]
+                        if col in summary_df.columns
+                    ]
+                )
+
                 summary_df[primary_kpi] = pd.to_numeric(
                     summary_df[primary_kpi],
                     errors="coerce",
                 ).round(4)
 
-            summary_df["Threshold"] = pd.to_numeric(
-                summary_df["Threshold"],
-                errors="coerce",
-            ).round(4)
+                summary_df["Threshold"] = float(threshold)
 
-            meet_count = int(
-                (summary_df["Remark"] == "Meet").sum()
-            )
-            not_meet_count = int(
-                (summary_df["Remark"] == "Not Meet").sum()
-            )
-            total_count = len(summary_df)
+                meet_count = int(
+                    (summary_df["Remark"] == "Meet").sum()
+                )
+                not_meet_count = int(
+                    (summary_df["Remark"] == "Not Meet").sum()
+                )
+                total_count = len(summary_df)
 
-            st.markdown("### 📋 KPI Result Summary")
+                st.markdown("### 📋 KPI Result Summary")
 
-            summary_metric_1, summary_metric_2, summary_metric_3 = st.columns(3)
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Meet", f"{meet_count:,}")
+                m2.metric("Not Meet", f"{not_meet_count:,}")
+                m3.metric("Total", f"{total_count:,}")
 
-            summary_metric_1.metric(
-                "Meet",
-                f"{meet_count:,}",
-            )
+                comparison_text = (
+                    f"{primary_kpi} ≥ {threshold:g}"
+                    if not lower_is_better
+                    else f"{primary_kpi} ≤ {threshold:g}"
+                )
 
-            summary_metric_2.metric(
-                "Not Meet",
-                f"{not_meet_count:,}",
-            )
+                st.caption(
+                    f"Daily: {comparison_text} = Meet; "
+                    "opposite condition = Not Meet."
+                )
 
-            summary_metric_3.metric(
-                "Total",
-                f"{total_count:,}",
-            )
-
-            comparison_text = (
-                f"{primary_kpi} ≥ {threshold:g}"
-                if not lower_is_better
-                else f"{primary_kpi} ≤ {threshold:g}"
-            )
-
-            st.caption(
-                f"Threshold rule: {comparison_text} = Meet; "
-                f"opposite condition = Not Meet."
-            )
-
-            # Excel-like summary:
-            #   Meet     -> green
-            #   Not Meet -> red
-            #
-            # Only the Remark column is colored so the table remains
-            # clean and easy to scan.
-            def color_kpi_remark(value):
-                if value == "Meet":
-                    return (
-                        "color: #008000; "
-                        "font-weight: 700;"
+                styled_summary = (
+                    summary_df.style
+                    .map(
+                        style_remark,
+                        subset=["Remark"],
                     )
-                if value == "Not Meet":
-                    return (
-                        "color: #FF0000; "
-                        "font-weight: 700;"
-                    )
-                return ""
+                )
 
-            styled_summary = (
-                summary_df.style
-                .map(
-                    color_kpi_remark,
-                    subset=["Remark"],
+                st.dataframe(
+                    styled_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # --------------------------------------------------------
+        # MODE 2 — AVERAGE DATE RANGE
+        # --------------------------------------------------------
+        elif date_evaluation_mode == "Average Date Range":
+
+            summary_df = (
+                valid_summary_source
+                .groupby(
+                    identity_cols,
+                    as_index=False,
+                    dropna=False,
+                )["_KPI_Result_Value"]
+                .agg(summary_agg)
+                .rename(
+                    columns={
+                        "_KPI_Result_Value": primary_kpi,
+                        **rename_map,
+                    }
                 )
             )
 
-            st.dataframe(
-                styled_summary,
-                use_container_width=True,
-                hide_index=True,
-            )
+            if not summary_df.empty:
+
+                summary_df["Remark"] = summary_df[
+                    primary_kpi
+                ].apply(evaluate_remark)
+
+                summary_df["Threshold"] = float(threshold)
+
+                if (
+                    isinstance(date_range, tuple)
+                    and len(date_range) == 2
+                ):
+                    range_start, range_end = date_range
+                    date_label = (
+                        f"{pd.Timestamp(range_start):%d-%b-%Y}"
+                        f" → "
+                        f"{pd.Timestamp(range_end):%d-%b-%Y}"
+                    )
+                else:
+                    date_label = "Selected Date Range"
+
+                summary_df["Date"] = date_label
+
+                preferred_summary_cols = [
+                    "eNodeB Name",
+                    "Cell Name",
+                    "LocalCell Id",
+                    "Date",
+                    "Sector",
+                    "FreqBand",
+                    primary_kpi,
+                    "Remark",
+                    "Threshold",
+                ]
+
+                summary_cols = [
+                    col
+                    for col in preferred_summary_cols
+                    if col in summary_df.columns
+                ]
+
+                summary_df = summary_df[summary_cols].sort_values(
+                    [
+                        col
+                        for col in [
+                            "Sector",
+                            "FreqBand",
+                            "Cell Name",
+                        ]
+                        if col in summary_df.columns
+                    ]
+                )
+
+                summary_df[primary_kpi] = pd.to_numeric(
+                    summary_df[primary_kpi],
+                    errors="coerce",
+                ).round(4)
+
+                summary_df["Threshold"] = float(threshold)
+
+                meet_count = int(
+                    (summary_df["Remark"] == "Meet").sum()
+                )
+                not_meet_count = int(
+                    (summary_df["Remark"] == "Not Meet").sum()
+                )
+                total_count = len(summary_df)
+
+                st.markdown("### 📋 KPI Result Summary")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Meet", f"{meet_count:,}")
+                m2.metric("Not Meet", f"{not_meet_count:,}")
+                m3.metric("Total", f"{total_count:,}")
+
+                comparison_text = (
+                    f"{primary_kpi} ≥ {threshold:g}"
+                    if not lower_is_better
+                    else f"{primary_kpi} ≤ {threshold:g}"
+                )
+
+                st.caption(
+                    f"Average Date Range: {date_label}. "
+                    f"Average {primary_kpi} is evaluated against "
+                    f"{comparison_text}."
+                )
+
+                styled_summary = (
+                    summary_df.style
+                    .map(
+                        style_remark,
+                        subset=["Remark"],
+                    )
+                )
+
+                st.dataframe(
+                    styled_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # --------------------------------------------------------
+        # MODE 3 — COMPARE 2 DATES
+        # --------------------------------------------------------
+        else:
+
+            if (
+                compare_date_a is not None
+                and compare_date_b is not None
+                and compare_date_a != compare_date_b
+            ):
+
+                def aggregate_for_date(selected_date):
+                    date_source = valid_summary_source[
+                        valid_summary_source["_Summary_Date"]
+                        == pd.Timestamp(selected_date)
+                    ].copy()
+
+                    if date_source.empty:
+                        return pd.DataFrame()
+
+                    return (
+                        date_source
+                        .groupby(
+                            identity_cols,
+                            as_index=False,
+                            dropna=False,
+                        )["_KPI_Result_Value"]
+                        .agg(summary_agg)
+                    )
+
+                date_a_df = aggregate_for_date(compare_date_a)
+                date_b_df = aggregate_for_date(compare_date_b)
+
+                value_col = "_KPI_Result_Value"
+
+                date_a_df = date_a_df.rename(
+                    columns={
+                        value_col: "Date A KPI",
+                    }
+                )
+
+                date_b_df = date_b_df.rename(
+                    columns={
+                        value_col: "Date B KPI",
+                    }
+                )
+
+                if date_a_df.empty and date_b_df.empty:
+                    compare_summary = pd.DataFrame()
+                else:
+                    compare_summary = pd.merge(
+                        date_a_df,
+                        date_b_df,
+                        on=identity_cols,
+                        how="outer",
+                    )
+
+                if not compare_summary.empty:
+
+                    compare_summary = compare_summary.rename(
+                        columns=rename_map
+                    )
+
+                    compare_summary["Date A"] = (
+                        pd.Timestamp(compare_date_a)
+                        .strftime("%d-%b-%Y")
+                    )
+                    compare_summary["Date B"] = (
+                        pd.Timestamp(compare_date_b)
+                        .strftime("%d-%b-%Y")
+                    )
+
+                    compare_summary["Remark A"] = (
+                        compare_summary["Date A KPI"]
+                        .apply(evaluate_remark)
+                    )
+
+                    compare_summary["Remark B"] = (
+                        compare_summary["Date B KPI"]
+                        .apply(evaluate_remark)
+                    )
+
+                    compare_summary["Threshold"] = float(threshold)
+
+                    preferred_compare_cols = [
+                        "eNodeB Name",
+                        "Cell Name",
+                        "LocalCell Id",
+                        "Date A",
+                        "Date A KPI",
+                        "Remark A",
+                        "Date B",
+                        "Date B KPI",
+                        "Remark B",
+                        "Sector",
+                        "FreqBand",
+                        "Threshold",
+                    ]
+
+                    compare_cols = [
+                        col
+                        for col in preferred_compare_cols
+                        if col in compare_summary.columns
+                    ]
+
+                    compare_summary = compare_summary[
+                        compare_cols
+                    ]
+
+                    compare_summary = compare_summary.sort_values(
+                        [
+                            col
+                            for col in [
+                                "Sector",
+                                "FreqBand",
+                                "Cell Name",
+                            ]
+                            if col in compare_summary.columns
+                        ]
+                    )
+
+                    for value_col in [
+                        "Date A KPI",
+                        "Date B KPI",
+                    ]:
+                        if value_col in compare_summary.columns:
+                            compare_summary[value_col] = pd.to_numeric(
+                                compare_summary[value_col],
+                                errors="coerce",
+                            ).round(4)
+
+                    compare_summary["Threshold"] = float(threshold)
+
+                    meet_a = int(
+                        (
+                            compare_summary["Remark A"]
+                            == "Meet"
+                        ).sum()
+                    )
+                    not_meet_a = int(
+                        (
+                            compare_summary["Remark A"]
+                            == "Not Meet"
+                        ).sum()
+                    )
+                    meet_b = int(
+                        (
+                            compare_summary["Remark B"]
+                            == "Meet"
+                        ).sum()
+                    )
+                    not_meet_b = int(
+                        (
+                            compare_summary["Remark B"]
+                            == "Not Meet"
+                        ).sum()
+                    )
+
+                    st.markdown("### 📋 KPI Result Summary")
+
+                    st.caption(
+                        f"Compare "
+                        f"{pd.Timestamp(compare_date_a):%d-%b-%Y}"
+                        f" vs "
+                        f"{pd.Timestamp(compare_date_b):%d-%b-%Y}. "
+                        f"Threshold = {threshold:g}."
+                    )
+
+                    cm1, cm2, cm3, cm4 = st.columns(4)
+                    cm1.metric(
+                        f"Meet — {pd.Timestamp(compare_date_a):%d-%b}",
+                        f"{meet_a:,}",
+                    )
+                    cm2.metric(
+                        f"Not Meet — {pd.Timestamp(compare_date_a):%d-%b}",
+                        f"{not_meet_a:,}",
+                    )
+                    cm3.metric(
+                        f"Meet — {pd.Timestamp(compare_date_b):%d-%b}",
+                        f"{meet_b:,}",
+                    )
+                    cm4.metric(
+                        f"Not Meet — {pd.Timestamp(compare_date_b):%d-%b}",
+                        f"{not_meet_b:,}",
+                    )
+
+                    styled_compare = (
+                        compare_summary.style
+                        .map(
+                            style_remark,
+                            subset=[
+                                col
+                                for col in [
+                                    "Remark A",
+                                    "Remark B",
+                                ]
+                                if col in compare_summary.columns
+                            ],
+                        )
+                    )
+
+                    st.dataframe(
+                        styled_compare,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            elif (
+                compare_date_a is not None
+                and compare_date_b is not None
+                and compare_date_a == compare_date_b
+            ):
+                st.warning(
+                    "Date A and Date B must be different for comparison."
+                )
 
     if analysis_scope == "Site Level":
         scope_text = (
