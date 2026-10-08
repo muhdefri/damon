@@ -1410,6 +1410,8 @@ with top_mode_col:
     )
 
 with top_date_col:
+    st.caption("Search can use either Site ID (e.g. SUM-JA-MBN-0728) or the full eNodeB Name. This is independent from the Problem Cell selector below.")
+
     st.markdown("**Date Range**")
 
     # Date limits are calculated from the uploaded dataset first.
@@ -3814,6 +3816,97 @@ def render_kpi_status_transition():
             )
 
     # ------------------------------------------------------------
+    # Optional exact target selector
+    # ------------------------------------------------------------
+    # Build exact target labels from the transition result. This selector
+    # narrows the current analysis without changing the pasted master list.
+    target_selector_df = transition_result[
+        [
+            "_Cell_Display",
+            "_Site_ID_Search",
+            "_FreqBand",
+        ]
+    ].drop_duplicates().copy()
+
+    if not target_selector_df.empty:
+        target_selector_df["_Target Label"] = (
+            target_selector_df["_FreqBand"].astype(str)
+            + " | "
+            + target_selector_df["_Cell_Display"].astype(str)
+            + " | "
+            + target_selector_df["_Site_ID_Search"].astype(str)
+        )
+
+        target_labels = sorted(
+            target_selector_df["_Target Label"].dropna().unique().tolist()
+        )
+
+        st.markdown("#### 🎯 Select Problem Cell / Site")
+
+        selected_target_labels = st.multiselect(
+            "Select one or more exact targets",
+            options=target_labels,
+            default=[],
+            key="kpi_status_selected_targets_v32",
+            placeholder="All targets — select specific Cell + Site to focus analysis",
+            help=(
+                "Optional filter. Leave empty to show all pasted targets. "
+                "Select one or more targets to show only those Cell + Site + "
+                "FreqBand combinations in the summary, detail table, and trend charts."
+            ),
+        )
+
+        if selected_target_labels:
+            selected_target_set = set(selected_target_labels)
+
+            def make_target_label(row):
+                return (
+                    str(row["_FreqBand"])
+                    + " | "
+                    + str(row["_Cell_Display"])
+                    + " | "
+                    + str(row["_Site_ID_Search"])
+                )
+
+            transition_result["_Target Label"] = transition_result.apply(
+                make_target_label,
+                axis=1,
+            )
+
+            transition_result = transition_result[
+                transition_result["_Target Label"].isin(
+                    selected_target_set
+                )
+            ].copy()
+
+            # Re-apply the currently selected transition filter after the
+            # exact Cell/Site/FreqBand selector.
+            if transition_filter == "Not Meet Only":
+                display_df = transition_result[
+                    transition_result["Status After"].eq("Not Meet")
+                ].copy()
+            elif transition_filter == "All":
+                display_df = transition_result.copy()
+            elif transition_filter == "No Data":
+                display_df = transition_result[
+                    transition_result["Transition"].eq("No Data")
+                ].copy()
+            else:
+                display_df = transition_result[
+                    transition_result["Transition"].eq(transition_filter)
+                ].copy()
+
+            st.caption(
+                f"🎯 Focused analysis: **{len(selected_target_labels)}** "
+                "selected target(s)."
+            )
+        else:
+            st.caption(
+                "All pasted targets are included. Select one or more "
+                "Cell + Site + FreqBand targets above to focus the analysis."
+            )
+
+    # ------------------------------------------------------------
     # Detailed result
     # ------------------------------------------------------------
     if transition_filter == "Not Meet Only":
@@ -4003,31 +4096,30 @@ def render_kpi_status_transition():
                 and kpi not in {"TA Distribution"}
             ]
 
-            preferred_counter = "Average TA"
-            if preferred_counter not in counter_candidates:
-                preferred_counter = (
-                    counter_candidates[0]
-                    if counter_candidates
-                    else None
-                )
+            # Counter KPI is OPTIONAL.
+            # Do not force Average TA as the default, and allow the user
+            # to select "None" when only RANK2 Rate is needed.
+            counter_options = ["None"] + counter_candidates
 
-            if preferred_counter:
-                counter_kpi = st.selectbox(
-                    "Counter KPI for RANK2 Rate",
-                    counter_candidates,
-                    index=counter_candidates.index(preferred_counter),
-                    key="rank2_counter_kpi_v29",
-                    help=(
-                        "The counter KPI is plotted on the right Y-axis "
-                        "against RANK2 Rate on the left Y-axis. "
-                        "Default is Average TA."
-                    ),
-                )
+            counter_kpi = st.selectbox(
+                "Counter KPI for RANK2 Rate",
+                counter_options,
+                index=0,
+                key="rank2_counter_kpi_v31",
+                help=(
+                    "Optional KPI for the right Y-axis. "
+                    "Average TA is available but is not selected automatically. "
+                    "Choose None to show RANK2 Rate only."
+                ),
+            )
 
-                rank2_history = build_target_history(
-                    rank2_pairs,
-                    "RANK2 Rate",
-                )
+            rank2_history = build_target_history(
+                rank2_pairs,
+                "RANK2 Rate",
+            )
+
+            counter_history = pd.DataFrame()
+            if counter_kpi != "None":
                 counter_history = build_target_history(
                     rank2_pairs,
                     counter_kpi,
@@ -4138,9 +4230,11 @@ def render_kpi_status_transition():
                         )
 
                     # Counter KPI target on right axis, if configured.
-                    counter_target_row = target_df[
-                        target_df["KPI"].eq(counter_kpi)
-                    ]
+                    counter_target_row = (
+                        target_df[target_df["KPI"].eq(counter_kpi)]
+                        if counter_kpi != "None"
+                        else pd.DataFrame()
+                    )
 
                     if not counter_target_row.empty and not counter_history.empty:
                         counter_target = float(
@@ -4194,10 +4288,11 @@ def render_kpi_status_transition():
                             showgrid=True,
                         ),
                         yaxis2=dict(
-                            title=counter_kpi,
+                            title=counter_kpi if counter_kpi != "None" else "",
                             side="right",
                             overlaying="y",
                             showgrid=False,
+                            showticklabels=(counter_kpi != "None"),
                         ),
                         legend=dict(
                             orientation="h",
@@ -4213,13 +4308,20 @@ def render_kpi_status_transition():
                         use_container_width=True,
                     )
 
-                    st.caption(
-                        f"Blue solid = RANK2 Rate | "
-                        f"Orange dashed = {counter_kpi} | "
-                        f"Left axis = RANK2 Rate | "
-                        f"Right axis = {counter_kpi} | "
-                        f"Cell Name is shown in the legend"
-                    )
+                    if counter_kpi == "None":
+                        st.caption(
+                            "Blue solid = RANK2 Rate | "
+                            "Counter KPI = None | "
+                            "Cell Name is shown in the legend"
+                        )
+                    else:
+                        st.caption(
+                            f"Blue solid = RANK2 Rate | "
+                            f"Orange dashed = {counter_kpi} | "
+                            f"Left axis = RANK2 Rate | "
+                            f"Right axis = {counter_kpi} | "
+                            f"Cell Name is shown in the legend"
+                        )
 
         # --------------------------------------------------------
         # Other Not Meet KPI trend charts remain independent.
