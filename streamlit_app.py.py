@@ -3452,16 +3452,6 @@ def render_kpi_analysis():
 # ============================================================
 
 def render_configurable_kpi_analysis():
-    # Exact Bulk Cell + Site + FreqBand targets must force the KPI
-    # Analysis view to remain at Cell Level. The normal Analysis Level
-    # radio button may still show Site Level, but Bulk mode must not
-    # collapse the requested Cell Names into a single site trace.
-    force_bulk_cell_level = bool(global_bulk_pairs)
-    effective_cell_level = (
-        analysis_scope == "Cell Level"
-        or force_bulk_cell_level
-    )
-
     if site_level_df.empty:
         return
 
@@ -4064,6 +4054,16 @@ def render_configurable_kpi_analysis():
         )
         if value
     )
+
+    # Exact Bulk Cell + Site + FreqBand targets force Cell-level KPI
+    # traces. This block MUST come after analysis_scope is assigned,
+    # otherwise Python raises UnboundLocalError.
+    force_bulk_cell_level = bool(global_bulk_pairs)
+    effective_cell_level = (
+        analysis_scope == "Cell Level"
+        or force_bulk_cell_level
+    )
+
 
     band_sort_order = [
         "700",
