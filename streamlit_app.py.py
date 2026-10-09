@@ -1928,12 +1928,29 @@ with st.spinner("Preparing KPI CSV..."):
     # Read only columns required by the dashboard.
     # This avoids loading unused raw KPI columns.
     # --------------------------------------------------------
+    # Extra source columns used only by the optional Num/Denum KPI mode.
+    NUM_DEN_SOURCE_COLUMNS = {
+        "RACH Success Rate": ("RACH Success Rate_num_rs", "RACH Success Rate_denum_rs", "ratio_pct"),
+        "VoLTE Call Success Rate": ("Voice Call Success Rate (VoLTE)_Num", "Voice Call Success Rate (VoLTE)_DEN", "ratio_pct"),
+        "DL Spectrum Efficiency": ("DL Spectrum Efficiency Num", "DL Spectrum Efficiency DeNum", "ratio"),
+        "UL RSSI PUCCH": ("UL RSSI PUCCH (dBm)_Num", "UL RSSI PUCCH (dBm)_Denum", "weighted_avg"),
+        "Average TA": ("Average TA (m)_Num", "Average TA (m)_Den", "weighted_avg"),
+        "UL User Throughput": ("SWAP2016_4G_UL User Thpt_Num", "SWAP2016_4G_UL User Thpt_Denum", "weighted_avg"),
+    }
+    num_den_source_columns = {
+        column
+        for numerator, denominator, _formula in NUM_DEN_SOURCE_COLUMNS.values()
+        for column in (numerator, denominator)
+        if column in csv_headers
+    }
+
     columns_to_read = {
         enodeb_col,
         cell_col,
         localcell_col,
         date_col,
         *kpi_actual_columns.values(),
+        *num_den_source_columns,
     }
 
     if time_col is not None:
@@ -1975,6 +1992,56 @@ with st.spinner("Preparing KPI CSV..."):
     )
 
 # ============================================================
+# KPI VALUE MODE — preserve normal mode; optionally derive KPI
+# values from explicitly paired numerator/denominator counters.
+# ============================================================
+kpi_value_mode = st.sidebar.radio(
+    "KPI Value Mode",
+    ["KPI Biasa", "KPI Num/Denum"],
+    index=0,
+    help="KPI Num/Denum hanya mengaktifkan KPI yang memiliki pasangan counter yang dikenal.",
+    key="kpi_value_mode_v69",
+)
+
+NUM_DEN_SOURCE_COLUMNS = {
+    "RACH Success Rate": ("RACH Success Rate_num_rs", "RACH Success Rate_denum_rs", "ratio_pct"),
+    "VoLTE Call Success Rate": ("Voice Call Success Rate (VoLTE)_Num", "Voice Call Success Rate (VoLTE)_DEN", "ratio_pct"),
+    "DL Spectrum Efficiency": ("DL Spectrum Efficiency Num", "DL Spectrum Efficiency DeNum", "ratio"),
+    "UL RSSI PUCCH": ("UL RSSI PUCCH (dBm)_Num", "UL RSSI PUCCH (dBm)_Denum", "weighted_avg"),
+    "Average TA": ("Average TA (m)_Num", "Average TA (m)_Den", "weighted_avg"),
+    "UL User Throughput": ("SWAP2016_4G_UL User Thpt_Num", "SWAP2016_4G_UL User Thpt_Denum", "weighted_avg"),
+}
+
+num_den_available = []
+if kpi_value_mode == "KPI Num/Denum":
+    for derived_name, (numerator_col, denominator_col, formula) in NUM_DEN_SOURCE_COLUMNS.items():
+        if numerator_col not in df.columns or denominator_col not in df.columns:
+            continue
+        numerator = pd.to_numeric(df[numerator_col], errors="coerce")
+        denominator = pd.to_numeric(df[denominator_col], errors="coerce")
+        valid = denominator.notna() & denominator.ne(0) & numerator.notna()
+        derived_values = pd.Series(float("nan"), index=df.index, dtype="float64")
+        if formula == "ratio_pct":
+            derived_values.loc[valid] = numerator.loc[valid] / denominator.loc[valid] * 100.0
+        elif formula == "ratio":
+            derived_values.loc[valid] = numerator.loc[valid] / denominator.loc[valid]
+        else:
+            # Numerator/denominator pairs for weighted averages are assumed to
+            # be accumulated sum/count counters; validate this with KPI owners.
+            derived_values.loc[valid] = numerator.loc[valid] / denominator.loc[valid]
+        derived_column = f"__DERIVED_NUM_DEN__{derived_name}"
+        df[derived_column] = derived_values
+        num_den_available.append((derived_name, derived_column))
+
+    st.sidebar.caption(
+        f"Num/Denum KPI tersedia: {len(num_den_available)} pasangan counter terdeteksi."
+    )
+    if not num_den_available:
+        st.sidebar.warning(
+            "Tidak ditemukan pasangan Num/Denum yang lengkap pada CSV ini."
+        )
+
+# ============================================================
 # KPI AVAILABILITY
 # ============================================================
 available_kpis = [
@@ -1988,6 +2055,24 @@ missing_kpis = [
     for kpi_name in KPI_CONFIG
     if kpi_name not in kpi_actual_columns
 ]
+
+if kpi_value_mode == "KPI Num/Denum":
+    for derived_name, derived_column in num_den_available:
+        display_name = f"{derived_name} [Num/Denum]"
+        if display_name not in KPI_CONFIG:
+            base_category = (
+                "Accessibility" if "Success Rate" in derived_name
+                else "Spectrum" if "Spectrum Efficiency" in derived_name
+                else "Radio/Coverage" if derived_name in ("UL RSSI PUCCH", "Average TA")
+                else "Traffic"
+            )
+            KPI_CONFIG[display_name] = {
+                "column": derived_column,
+                "category": base_category,
+                "unit": "%" if derived_name.endswith("Success Rate") else "",
+            }
+        kpi_actual_columns[display_name] = derived_column
+        available_kpis.append(display_name)
 
 if not available_kpis:
 
