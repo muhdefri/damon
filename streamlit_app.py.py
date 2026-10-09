@@ -6696,6 +6696,50 @@ def render_configurable_kpi_analysis():
 
     compare_date_a = None
     compare_date_b = None
+    evaluation_date_range = None
+
+    # Daily and Average modes need their own explicit date inputs.
+    if (
+        date_evaluation_mode in ("Daily", "Average Date Range")
+        and available_analysis_dates
+    ):
+        date_label = lambda value: pd.Timestamp(value).strftime("%d-%b-%Y")
+        default_start = available_analysis_dates[0]
+        default_end = available_analysis_dates[-1]
+
+        saved_start = st.session_state.get(
+            "custom_kpi_analysis_eval_start"
+        )
+        saved_end = st.session_state.get(
+            "custom_kpi_analysis_eval_end"
+        )
+        if saved_start not in available_analysis_dates:
+            saved_start = default_start
+        if saved_end not in available_analysis_dates:
+            saved_end = default_end
+
+        eval_start_col, eval_end_col = st.columns(2, gap="small")
+        with eval_start_col:
+            evaluation_start = st.selectbox(
+                "Evaluation Start Date",
+                options=available_analysis_dates,
+                index=available_analysis_dates.index(saved_start),
+                format_func=date_label,
+                key="custom_kpi_analysis_eval_start",
+            )
+        with eval_end_col:
+            evaluation_end = st.selectbox(
+                "Evaluation End Date",
+                options=available_analysis_dates,
+                index=available_analysis_dates.index(saved_end),
+                format_func=date_label,
+                key="custom_kpi_analysis_eval_end",
+            )
+
+        evaluation_start, evaluation_end = sorted(
+            [evaluation_start, evaluation_end]
+        )
+        evaluation_date_range = (evaluation_start, evaluation_end)
 
     if date_evaluation_mode == "Compare 2 Dates":
         if len(available_analysis_dates) < 1:
@@ -6834,7 +6878,13 @@ def render_configurable_kpi_analysis():
 
     st.caption(
         (
-            "Average Date Range uses the current Analysis Date Range."
+            (
+                "Average Date Range averages valid KPI values between "
+                f"{evaluation_date_range[0]:%d-%b-%Y} and "
+                f"{evaluation_date_range[1]:%d-%b-%Y}."
+                if evaluation_date_range is not None
+                else "Average Date Range uses the selected evaluation dates."
+            )
             if date_evaluation_mode == "Average Date Range"
             else
             (
@@ -6842,7 +6892,13 @@ def render_configurable_kpi_analysis():
                 "a multi-day range. Same Start/End = single-day comparison."
                 if date_evaluation_mode == "Compare 2 Dates"
                 else
-                "Daily evaluation checks each date independently."
+                (
+                    "Daily evaluation checks each date independently within "
+                    f"{evaluation_date_range[0]:%d-%b-%Y} to "
+                    f"{evaluation_date_range[1]:%d-%b-%Y}."
+                    if evaluation_date_range is not None
+                    else "Daily evaluation checks each date independently."
+                )
             )
         )
     )
@@ -8220,6 +8276,16 @@ def render_configurable_kpi_analysis():
             summary_source["_Date_Day"],
             errors="coerce",
         ).dt.normalize()
+
+        if (
+            date_evaluation_mode in ("Daily", "Average Date Range")
+            and evaluation_date_range is not None
+        ):
+            eval_start, eval_end = evaluation_date_range
+            summary_source = summary_source[
+                (summary_source["_Summary_Date"] >= pd.Timestamp(eval_start))
+                & (summary_source["_Summary_Date"] <= pd.Timestamp(eval_end))
+            ].copy()
 
         # Higher is better for accessibility, availability, mobility,
         # throughput, CQI, etc.
