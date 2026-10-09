@@ -223,27 +223,6 @@ def render_twamp_dashboard():
     c3.metric("Not Meet (> 0.7%)", f"{not_meet:,}", f"{not_meet / total * 100:.1f}%", delta_color="inverse")
     c4.metric("Average Packet Loss", f"{avg_pl:.4f}%")
 
-    st.subheader("Packet Loss Trend")
-    fig = go.Figure()
-    trace_name = site_col if site_col else None
-    if trace_name:
-        for site_name, grp in df.groupby(trace_name, dropna=False):
-            fig.add_trace(go.Scatter(
-                x=grp["_Date"], y=grp["_PacketLoss"], mode="lines+markers",
-                name=str(site_name), line=dict(width=2),
-                hovertemplate="%{x}<br>Packet Loss: %{y:.4f}%<extra>%{fullData.name}</extra>",
-            ))
-    else:
-        fig.add_trace(go.Scatter(x=df["_Date"], y=df["_PacketLoss"], mode="lines+markers", name="Packet Loss"))
-    fig.add_hline(y=target, line_dash="dash", line_color="red",
-                  annotation_text="Target PL 0.7%", annotation_position="top left")
-    fig.update_layout(
-        template="plotly_white", height=520,
-        xaxis_title="Date", yaxis_title="Packet Loss (%)",
-        hovermode="x unified", legend_title_text="Site / eNodeB",
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
     # Optional RTT chart, when the TWAMP export includes this KPI.
     rtt_col = "VS.BSTWAMP.Rtt.Means(ms)"
     if rtt_col in df.columns:
@@ -369,6 +348,70 @@ def render_twamp_dashboard():
         })
 
     condition_summary = pd.DataFrame(condition_rows)
+    # Chart category selector is driven by the Site Condition summary.
+    st.subheader("TWAMP Packet Loss")
+    condition_options = ["All", "Normal", "Spike", "Recurring High", "Persistent High"]
+    selected_condition = st.selectbox(
+        "Filter chart by Site Condition",
+        condition_options,
+        index=0,
+        key="twamp_chart_condition_filter",
+    )
+
+    chart_df = df.copy()
+    if selected_condition != "All" and not condition_summary.empty:
+        condition_sites = condition_summary.loc[
+            condition_summary["Site Condition"] == selected_condition,
+            "Site Display",
+        ].astype(str).unique().tolist()
+        if site_col:
+            chart_df = chart_df[chart_df[site_col].astype(str).isin(condition_sites)]
+        else:
+            chart_df = chart_df.iloc[0:0]
+
+    fig = go.Figure()
+    trace_name = site_col if site_col else None
+    if trace_name:
+        for site_name, grp in chart_df.groupby(trace_name, dropna=False):
+            grp = grp.sort_values("_Date")
+            fig.add_trace(go.Scatter(
+                x=grp["_Date"], y=grp["_PacketLoss"], mode="lines+markers",
+                name=str(site_name), line=dict(width=2),
+                hovertemplate="%{x}<br>Packet Loss: %{y:.4f}%<extra>%{fullData.name}</extra>",
+            ))
+    elif not chart_df.empty:
+        fig.add_trace(go.Scatter(
+            x=chart_df["_Date"], y=chart_df["_PacketLoss"],
+            mode="lines+markers", name="Packet Loss",
+        ))
+
+    fig.add_hline(
+        y=target, line_dash="dash", line_color="red",
+        annotation_text="Target PL 0.7%", annotation_position="top left",
+    )
+    fig.update_layout(
+        template="plotly_white",
+        height=520,
+        autosize=True,
+        xaxis_title="Date",
+        yaxis_title="Packet Loss (%)",
+        hovermode="x unified",
+        legend_title_text="Site / eNodeB",
+        margin=dict(l=8, r=8, t=24, b=42),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            title=dict(text="Site / eNodeB"),
+        ),
+    )
+    if chart_df.empty:
+        st.info(f"Tidak ada site dengan kondisi '{selected_condition}' pada periode terpilih.")
+    else:
+        st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
+
     if not condition_summary.empty:
         condition_order = {
             "Persistent High": 0, "Recurring High": 1, "Spike": 2, "Normal": 3
