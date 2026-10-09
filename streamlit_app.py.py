@@ -118,6 +118,19 @@ def render_twamp_dashboard():
     enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
         "fullenodebname", "enodebname", "fullenodeb", "enodeb"
     }), None)
+    # Robust fallback for exports where the eNodeB header contains extra text
+    # or has been altered by spreadsheet/CSV tools.
+    if enodeb_col is None:
+        enodeb_col = next(
+            (c for c in raw.columns
+             if "enodeb" in _norm_col(c) and "name" in _norm_col(c)),
+            None,
+        )
+    # In the user's TWAMP export, column B is explicitly "eNodeB Name".
+    if enodeb_col is None and len(raw.columns) > 1:
+        second_col = raw.columns[1]
+        if raw[second_col].astype(str).str.contains(r"#|LTE|NR", case=False, regex=True).mean() > 0.5:
+            enodeb_col = second_col
     site_col = tower_col or enodeb_col or next(
         (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
     )
@@ -223,12 +236,8 @@ def render_twamp_dashboard():
     st.subheader("Packet Loss Summary — Site per Status")
     # Export-friendly site summary: keep TowerID and full eNodeB name visible,
     # and show the actual TWAMP packet-loss value alongside aggregates.
-    tower_name_col = next((c for c in raw.columns if _norm_col(c) in {
-        "towerid", "tower", "siteid", "sitecode"
-    }), None)
-    full_enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
-        "fullenodebname", "enodebname", "fullenodeb", "enodeb"
-    }), None)
+    tower_name_col = tower_col
+    full_enodeb_col = enodeb_col
 
     summary_source = df.copy()
     if tower_name_col:
@@ -242,6 +251,7 @@ def render_twamp_dashboard():
         summary_source["Full eNodeB Name"] = summary_source[site_col].fillna("").astype(str).str.strip()
     else:
         summary_source["Full eNodeB Name"] = ""
+        st.warning("Kolom eNodeB Name tidak terdeteksi. Kolom yang terbaca: " + ", ".join(map(str, raw.columns[:10])))
 
     # Extract TowerID embedded in the eNodeB name, e.g.
     # 4251030E_LTE_KINALI#SUM-SB-SPE-0424#MC.
@@ -249,7 +259,7 @@ def render_twamp_dashboard():
     if "TowerID" not in summary_source.columns:
         summary_source["TowerID"] = ""
     enodeb_text = summary_source["Full eNodeB Name"].fillna("").astype(str).str.strip()
-    extracted_tower = enodeb_text.str.extract(r"#(SUM-[^#]+)#", flags=re.IGNORECASE, expand=False)
+    extracted_tower = enodeb_text.str.extract(r"(SUM-[^#]*)", flags=re.IGNORECASE, expand=False)
     summary_source["TowerID"] = summary_source["TowerID"].fillna("").astype(str).str.strip()
     missing_tower = summary_source["TowerID"].eq("")
     summary_source.loc[missing_tower, "TowerID"] = extracted_tower[missing_tower].fillna("")
