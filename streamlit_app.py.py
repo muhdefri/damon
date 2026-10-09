@@ -9100,6 +9100,10 @@ if chart_layout == "Vertical" and "TA Distribution" in selected_kpis:
                     f"Total UE Attempts: {int(round(total_ue_attempts)):,}"
                 )
 
+                # Match the reference layout: distribution chart on the left,
+                # detailed TA table on the right.
+                chart_col, table_col = st.columns([3.3, 1.25], gap="medium")
+
                 from plotly.subplots import make_subplots
                 ta_fig = make_subplots(specs=[[{"secondary_y": True}]])
                 ta_fig.add_trace(
@@ -9149,14 +9153,43 @@ if chart_layout == "Vertical" and "TA Distribution" in selected_kpis:
                 )
                 ta_fig.update_yaxes(title_text="UE Attempts", secondary_y=False, rangemode="tozero")
                 ta_fig.update_yaxes(title_text="CDF (%)", secondary_y=True, range=[0, 105], ticksuffix="%")
-                show_chart(ta_fig, use_container_width=True)
-
                 display_summary = ta_summary.drop(columns=["_CDF Numeric"])
-                st.dataframe(
-                    display_summary,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+
+                with chart_col:
+                    show_chart(ta_fig, use_container_width=True)
+
+                with table_col:
+                    st.markdown("#### TA Cell")
+                    st.dataframe(
+                        display_summary,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=460,
+                        column_config={
+                            "TA Index": st.column_config.NumberColumn(
+                                "TA Index",
+                                format="%d",
+                                width="small",
+                            ),
+                            "Distance": st.column_config.TextColumn(
+                                "Distance",
+                                width="medium",
+                            ),
+                            "UE Number": st.column_config.NumberColumn(
+                                "UE Number",
+                                format="%d",
+                                width="small",
+                            ),
+                            "CDF": st.column_config.TextColumn(
+                                "CDF",
+                                width="small",
+                            ),
+                            "Overshoot UE (%)": st.column_config.TextColumn(
+                                "UE Share (%)",
+                                width="small",
+                            ),
+                        },
+                    )
 
                 csv_data = display_summary.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
