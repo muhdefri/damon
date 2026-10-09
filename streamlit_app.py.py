@@ -1894,11 +1894,22 @@ with st.spinner("Preparing KPI CSV..."):
     if time_col is not None:
         columns_to_read.add(time_col)
 
-    ta_distribution_cols = [
-        f"L.RA.TA.UE.Index{i}"
-        for i in range(12)
-        if f"L.RA.TA.UE.Index{i}" in csv_headers
-    ]
+    ta_distribution_cols = []
+    ta_distribution_col_map = {}
+    for ta_index in range(12):
+        expected_prefix = f"L.RA.TA.UE.Index{ta_index}"
+        actual_ta_col = next(
+            (
+                header for header in csv_headers
+                if str(header).strip() == expected_prefix
+                or str(header).strip().startswith(expected_prefix + " ")
+                or str(header).strip().startswith(expected_prefix + "(")
+            ),
+            None,
+        )
+        if actual_ta_col is not None:
+            ta_distribution_cols.append(actual_ta_col)
+            ta_distribution_col_map[ta_index] = actual_ta_col
     columns_to_read.update(ta_distribution_cols)
 
     columns_to_read = tuple(
@@ -3027,10 +3038,17 @@ for kpi_name in main_chart_kpis:
     # ========================================================
     if config.get("chart") == "ta_distribution":
 
+        # In Vertical layout, TA Distribution is rendered once at the very bottom
+        # with date/cell selectors, a UE-attempt bar chart, CDF on a secondary axis,
+        # and a matching table. Other layouts retain the original TA chart.
+        if chart_layout == "Vertical":
+            continue
+
         ta_cols = [
-            f"L.RA.TA.UE.Index{i}"
+            ta_distribution_col_map[i]
             for i in range(12)
-            if f"L.RA.TA.UE.Index{i}" in site_df.columns
+            if i in ta_distribution_col_map
+            and ta_distribution_col_map[i] in site_df.columns
         ]
 
         if not ta_cols:
@@ -8460,6 +8478,9 @@ def render_configurable_kpi_analysis():
     )
 
 
+
+
+
 def _bar_xaxis_padding(series):
     """Return half the smallest positive time interval for bar-edge padding."""
     s = pd.to_datetime(series, errors="coerce").dropna().sort_values().drop_duplicates()
@@ -8943,3 +8964,205 @@ if _download_figures:
             use_container_width=False,
         )
 
+
+# ============================================================
+# VERTICAL LAYOUT — TA DISTRIBUTION DETAIL (BOTTOM OF DASHBOARD)
+# ============================================================
+# Uses the uploaded L.RA.TA.UE.Index0..Index11 counters.
+# Bars show UE attempts by TA distance; the red line shows cumulative
+# distribution (CDF) on the secondary right axis.
+# ============================================================
+if chart_layout == "Vertical" and "TA Distribution" in selected_kpis:
+    st.markdown("---")
+    st.subheader("TA Distribution")
+
+    ta_index_columns = {}
+    for ta_index in range(12):
+        expected_prefix = f"L.RA.TA.UE.Index{ta_index}"
+        actual_ta_col = next(
+            (
+                header for header in site_df.columns
+                if str(header).strip() == expected_prefix
+                or str(header).strip().startswith(expected_prefix + " ")
+                or str(header).strip().startswith(expected_prefix + "(")
+            ),
+            None,
+        )
+        if actual_ta_col is not None:
+            ta_index_columns[ta_index] = actual_ta_col
+
+    ta_distance_labels = [
+        "0 - 156 m",
+        "156 - 234 m",
+        "234 - 546 m",
+        "546 - 1014 m",
+        "1014 - 1950 m",
+        "1950 - 3510 m",
+        "3510 - 6630 m",
+        "6630 - 14430 m",
+        "14430 - 30030 m",
+        "30030 - 53430 m",
+        "53430 - 76830 m",
+        ">76830 m",
+    ]
+
+    if not ta_index_columns:
+        st.warning(
+            "Kolom TA Distribution tidak ditemukan. Pastikan CSV memiliki "
+            "L.RA.TA.UE.Index0 sampai L.RA.TA.UE.Index11."
+        )
+    else:
+        ta_work = site_df.copy()
+        ta_work["_TA_Date"] = pd.to_datetime(ta_work["_Date"], errors="coerce").dt.normalize()
+        ta_work["_TA_Cell"] = ta_work["_Cell_Display"].map(normalize_cell_name)
+        ta_work = ta_work.dropna(subset=["_TA_Date"])
+        ta_dates = sorted(ta_work["_TA_Date"].dropna().unique())
+
+        if ta_work.empty or not ta_dates:
+            st.info("Tidak ada data tanggal yang valid untuk TA Distribution.")
+        else:
+            latest_ta_date = pd.Timestamp(ta_dates[-1]).to_pydatetime().date()
+            available_ta_dates = [pd.Timestamp(value).date() for value in ta_dates]
+            control_date_col, control_cell_col = st.columns([1, 2], gap="small")
+
+            with control_date_col:
+                selected_ta_date = st.selectbox(
+                    "TA Measurement Date",
+                    options=available_ta_dates,
+                    index=available_ta_dates.index(latest_ta_date),
+                    format_func=lambda value: value.strftime("%d %b %Y"),
+                    key="vertical_ta_distribution_date",
+                )
+
+            date_ta_df = ta_work[
+                ta_work["_TA_Date"].dt.date == selected_ta_date
+            ].copy()
+            available_ta_cells = sorted(
+                date_ta_df["_TA_Cell"].dropna().astype(str).unique().tolist()
+            )
+
+            with control_cell_col:
+                selected_ta_cell = st.selectbox(
+                    "Object / Cell Name",
+                    options=available_ta_cells,
+                    index=0 if available_ta_cells else None,
+                    key="vertical_ta_distribution_cell",
+                    help="Pilih satu cell untuk melihat distribusi TA pada tanggal terpilih.",
+                )
+
+            if not available_ta_cells or not selected_ta_cell:
+                st.info("Tidak ada cell yang tersedia pada tanggal terpilih.")
+            else:
+                selected_ta_rows = date_ta_df[
+                    date_ta_df["_TA_Cell"].astype(str) == str(selected_ta_cell)
+                ]
+
+                ta_values = []
+                for ta_index in range(12):
+                    column = ta_index_columns.get(ta_index)
+                    if column is None:
+                        count = 0.0
+                    else:
+                        count = float(
+                            parse_kpi_numeric(selected_ta_rows[column])
+                            .fillna(0)
+                            .clip(lower=0)
+                            .sum()
+                        )
+                    ta_values.append(count)
+
+                total_ue_attempts = sum(ta_values)
+                cumulative = []
+                running_total = 0.0
+                for count in ta_values:
+                    running_total += count
+                    cumulative.append(
+                        (running_total / total_ue_attempts * 100.0)
+                        if total_ue_attempts > 0 else 0.0
+                    )
+
+                ta_summary = pd.DataFrame({
+                    "TA Index": list(range(12)),
+                    "Distance": ta_distance_labels,
+                    "UE Number": [int(round(value)) for value in ta_values],
+                    "CDF": [f"{value:.2f}%" for value in cumulative],
+                    "_CDF Numeric": cumulative,
+                })
+                ta_summary["Overshoot UE (%)"] = [
+                    f"{(value / total_ue_attempts * 100.0):.2f}%"
+                    if total_ue_attempts > 0 else "0.00%"
+                    for value in ta_values
+                ]
+
+                st.caption(
+                    f"Date: {selected_ta_date:%d %b %Y}  |  "
+                    f"Cell Name: {selected_ta_cell}  |  "
+                    f"Total UE Attempts: {int(round(total_ue_attempts)):,}"
+                )
+
+                from plotly.subplots import make_subplots
+                ta_fig = make_subplots(specs=[[{"secondary_y": True}]])
+                ta_fig.add_trace(
+                    go.Bar(
+                        x=ta_distance_labels,
+                        y=[int(round(value)) for value in ta_values],
+                        name="UE Number",
+                        marker_color="#2478c4",
+                        hovertemplate="Distance: %{x}<br>UE Attempts: %{y:,}<extra></extra>",
+                    ),
+                    secondary_y=False,
+                )
+                ta_fig.add_trace(
+                    go.Scatter(
+                        x=ta_distance_labels,
+                        y=cumulative,
+                        name="CDF",
+                        mode="lines+markers+text",
+                        line=dict(color="#d7191c", width=3),
+                        marker=dict(size=7),
+                        text=[f"{value:.2f}%" for value in cumulative],
+                        textposition="top center",
+                        hovertemplate="Distance: %{x}<br>CDF: %{y:.2f}%<extra></extra>",
+                    ),
+                    secondary_y=True,
+                )
+                ta_fig.update_layout(
+                    title=f"TA Cell Distribution — {selected_ta_cell}",
+                    template="plotly_white",
+                    height=520,
+                    barmode="group",
+                    hovermode="x unified",
+                    margin=dict(l=35, r=35, t=65, b=115),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top",
+                        y=-0.28,
+                        xanchor="center",
+                        x=0.5,
+                    ),
+                )
+                ta_fig.update_xaxes(
+                    title_text="TA Distance",
+                    tickangle=-35,
+                    categoryorder="array",
+                    categoryarray=ta_distance_labels,
+                )
+                ta_fig.update_yaxes(title_text="UE Attempts", secondary_y=False, rangemode="tozero")
+                ta_fig.update_yaxes(title_text="CDF (%)", secondary_y=True, range=[0, 105], ticksuffix="%")
+                show_chart(ta_fig, use_container_width=True)
+
+                display_summary = ta_summary.drop(columns=["_CDF Numeric"])
+                st.dataframe(
+                    display_summary,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                csv_data = display_summary.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "Download TA Distribution CSV",
+                    data=csv_data,
+                    file_name=f"TA_Distribution_{selected_ta_cell}_{selected_ta_date:%Y%m%d}.csv",
+                    mime="text/csv",
+                    key="download_vertical_ta_distribution_csv",
+                )
