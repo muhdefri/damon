@@ -320,6 +320,14 @@ def render_twamp_dashboard():
         ["Max_PL_Percent", "Records"], ascending=[False, False]
     )
 
+    # Add a simple row number to make site lists easier to count and reference.
+    meet_summary.insert(0, "No", range(1, len(meet_summary) + 1))
+    not_meet_summary.insert(0, "No", range(1, len(not_meet_summary) + 1))
+    site_summary = site_summary.sort_values(
+        ["Status", "Site Display"], ascending=[True, True]
+    ).copy()
+    site_summary.insert(0, "No", site_summary.groupby("Status").cumcount() + 1)
+
     left_summary, right_summary = st.columns(2)
     with left_summary:
         st.markdown("### Not Meet Sites")
