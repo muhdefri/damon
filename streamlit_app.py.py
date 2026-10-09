@@ -5672,12 +5672,15 @@ def render_configurable_kpi_analysis():
     with scope_col:
         analysis_scope = st.radio(
             "Analysis Level",
-            ["Site Level", "Cell Level"],
+            ["Site Level", "Sector Level", "Cell Level"],
             horizontal=True,
             key="custom_kpi_analysis_scope",
             help=(
-                "Site Level aggregates the selected site(s). "
-                "Cell Level enables FreqBand and Cell Name filtering."
+                "Site Level compares each selected site. "
+                "Sector Level groups all matching cells by the dashboard's "
+                "existing sector mapping. Cell Level compares each Cell Name. "
+                "Bulk Cell + Site + FreqBand targets remain available and "
+                "continue to take precedence for exact cell-level analysis."
             ),
         )
 
@@ -6221,6 +6224,10 @@ def render_configurable_kpi_analysis():
     effective_cell_level = (
         analysis_scope == "Cell Level"
         or force_bulk_cell_level
+    )
+    effective_sector_level = (
+        analysis_scope == "Sector Level"
+        and not force_bulk_cell_level
     )
 
 
@@ -6894,6 +6901,24 @@ def render_configurable_kpi_analysis():
             .agg(**agg_dict)
             .sort_values(["_Chart_Date", "_Analysis_Cell"])
         )
+    elif effective_sector_level:
+        # Sector is mapped upstream from LocalCell ID / existing dashboard logic.
+        # Group all cells within the same mapped sector automatically.
+        work["_Analysis_Sector"] = (
+            analysis_df["_Sector_Display"]
+            .fillna("Unknown Sector")
+            .astype(str)
+            .str.strip()
+            .values
+        )
+        custom_df = (
+            work.groupby(
+                ["_Chart_Date", "_Analysis_Sector"],
+                as_index=False,
+            )
+            .agg(**agg_dict)
+            .sort_values(["_Chart_Date", "_Analysis_Sector"])
+        )
     else:
         custom_df = (
             work.groupby("_Chart_Date", as_index=False)
@@ -7518,6 +7543,88 @@ def render_configurable_kpi_analysis():
         # effective_cell_level is True and every requested Cell Name gets
         # its own trace/legend entry.
         # ------------------------------------------------------------
+        if (
+            len(valid_kpis) == 1
+            and effective_sector_level
+            and "_Analysis_Sector" in custom_df.columns
+        ):
+            single_kpi = valid_kpis[0]
+            sectors = [
+                value
+                for value in custom_df["_Analysis_Sector"]
+                .dropna()
+                .astype(str)
+                .unique()
+            ]
+            sector_colors = (
+                px.colors.qualitative.Plotly
+                + px.colors.qualitative.D3
+                + px.colors.qualitative.Safe
+                + px.colors.qualitative.Dark24
+            )
+            sector_color_map = {
+                sector: sector_colors[i % len(sector_colors)]
+                for i, sector in enumerate(sorted(sectors))
+            }
+            for sector in sorted(sectors):
+                sector_df = custom_df[
+                    custom_df["_Analysis_Sector"].astype(str) == str(sector)
+                ].sort_values("_Chart_Date")
+                fig.add_trace(
+                    go.Scatter(
+                        x=sector_df["_Chart_Date"],
+                        y=pd.to_numeric(sector_df[single_kpi], errors="coerce"),
+                        name=f"{sector} — {single_kpi}",
+                        legendgroup=sector,
+                        mode="lines+markers",
+                        line=dict(
+                            color=sector_color_map[sector],
+                            width=7 if single_kpi == primary_kpi else 5,
+                        ),
+                        marker=dict(
+                            color=sector_color_map[sector],
+                            size=7,
+                        ),
+                        connectgaps=True,
+                        yaxis="y",
+                    )
+                )
+
+            # Existing axis/threshold/legend layout below can be reused.
+            if include_threshold:
+                fig.add_hline(
+                    y=float(threshold),
+                    line=dict(color="red", width=2, dash="dash"),
+                    annotation_text=f"{primary_kpi} Threshold {threshold:g}",
+                    annotation_position="top left",
+                    yref="y",
+                )
+            sector_values = pd.to_numeric(custom_df[single_kpi], errors="coerce").dropna()
+            if sector_values.empty:
+                sector_axis_range = [0, 1]
+            else:
+                sector_min = float(sector_values.min())
+                sector_max = float(sector_values.max())
+                sector_axis_range = (
+                    [0, max(100.0, sector_max * 1.08)]
+                    if 0 <= sector_min and sector_max <= 105
+                    else [
+                        sector_min - max((sector_max-sector_min)*0.08, 1.0),
+                        sector_max + max((sector_max-sector_min)*0.08, 1.0),
+                    ]
+                )
+            fig.update_layout(
+                title=title,
+                height=430,
+                template="plotly_white",
+                margin=dict(l=58, r=58, t=55, b=110),
+                hovermode="x unified",
+                xaxis=dict(title="Date / Time", tickformat=tickformat, hoverformat=hoverformat, dtick=dtick, showgrid=True, gridcolor="#e5e5e5", automargin=True),
+                yaxis=dict(title="Payload (GB)" if single_kpi.upper() == "PAYLOAD" else single_kpi, range=sector_axis_range, showgrid=True, gridcolor="#e5e5e5", automargin=True),
+                legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
+            )
+            return fig
+
         if (
             len(valid_kpis) == 1
             and effective_cell_level
