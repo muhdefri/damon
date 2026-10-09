@@ -221,28 +221,63 @@ def render_twamp_dashboard():
         st.plotly_chart(rtt_fig, use_container_width=True)
 
     st.subheader("Packet Loss Summary — Site per Status")
-    # Separate Meet and Not Meet tables, each with the site identifier visible.
-    site_display_col = site_col if site_col else None
-    if site_display_col:
-        site_summary = df.groupby([site_display_col, "_Status"], dropna=False).agg(
-            Records=("_PacketLoss", "size"),
-            Average_PL_Percent=("_PacketLoss", "mean"),
-            Max_PL_Percent=("_PacketLoss", "max"),
-        ).reset_index().rename(columns={site_display_col: "TowerID / Full eNodeB Name", "_Status": "Status"})
-        meet_summary = site_summary[site_summary["Status"] == "Meet"].sort_values(
-            ["Max_PL_Percent", "Records"], ascending=[True, False]
-        )
-        not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"].sort_values(
-            ["Max_PL_Percent", "Records"], ascending=[False, False]
-        )
+    # Export-friendly site summary: keep TowerID and full eNodeB name visible,
+    # and show the actual TWAMP packet-loss value alongside aggregates.
+    tower_name_col = next((c for c in raw.columns if _norm_col(c) in {
+        "towerid", "tower", "siteid", "sitecode"
+    }), None)
+    full_enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
+        "fullenodebname", "enodebname", "fullenodeb", "enodeb"
+    }), None)
+
+    summary_source = df.copy()
+    if tower_name_col:
+        tower_values = summary_source[tower_name_col].fillna("").astype(str).str.strip()
+        summary_source["TowerID"] = tower_values
     else:
-        site_summary = df.groupby("_Status", dropna=False).agg(
-            Records=("_PacketLoss", "size"),
-            Average_PL_Percent=("_PacketLoss", "mean"),
-            Max_PL_Percent=("_PacketLoss", "max"),
-        ).reset_index().rename(columns={"_Status": "Status"})
-        meet_summary = site_summary[site_summary["Status"] == "Meet"]
-        not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"]
+        summary_source["TowerID"] = ""
+    if full_enodeb_col:
+        summary_source["Full eNodeB Name"] = summary_source[full_enodeb_col].fillna("").astype(str).str.strip()
+    elif site_col:
+        summary_source["Full eNodeB Name"] = summary_source[site_col].fillna("").astype(str).str.strip()
+    else:
+        summary_source["Full eNodeB Name"] = ""
+
+    # Prefer SUM TowerID when present; otherwise identify the site by full eNodeB name.
+    use_tower = summary_source["TowerID"].str.upper().str.contains("SUM", regex=False) & summary_source["TowerID"].ne("")
+    summary_source["Site Display"] = summary_source["Full eNodeB Name"]
+    summary_source.loc[use_tower, "Site Display"] = summary_source.loc[use_tower, "TowerID"]
+    summary_source["Site Display"] = summary_source["Site Display"].replace("", "Site tidak diketahui")
+
+    def _site_status_summary(source):
+        rows = []
+        for (site_display, status), group in source.groupby(["Site Display", "_Status"], dropna=False):
+            group = group.sort_values("_Date")
+            latest = group.iloc[-1]
+            tower_vals = group["TowerID"].dropna().astype(str)
+            enodeb_vals = group["Full eNodeB Name"].dropna().astype(str)
+            rows.append({
+                "TowerID": next((v for v in tower_vals if v.strip()), ""),
+                "Full eNodeB Name": next((v for v in enodeb_vals if v.strip()), ""),
+                "Site Display": site_display,
+                "Status": status,
+                "Records": int(len(group)),
+                "Latest Date": latest["_Date"].strftime("%Y-%m-%d"),
+                "Latest_PL_Percent": float(latest["_PacketLoss"]),
+                "Average_PL_Percent": float(group["_PacketLoss"].mean()),
+                "Max_PL_Percent": float(group["_PacketLoss"].max()),
+            })
+        columns = ["TowerID", "Full eNodeB Name", "Site Display", "Status", "Records",
+                   "Latest Date", "Latest_PL_Percent", "Average_PL_Percent", "Max_PL_Percent"]
+        return pd.DataFrame(rows, columns=columns)
+
+    site_summary = _site_status_summary(summary_source)
+    meet_summary = site_summary[site_summary["Status"] == "Meet"].sort_values(
+        ["Site Display", "Latest Date"]
+    )
+    not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"].sort_values(
+        ["Max_PL_Percent", "Records"], ascending=[False, False]
+    )
 
     left_summary, right_summary = st.columns(2)
     with left_summary:
@@ -252,7 +287,7 @@ def render_twamp_dashboard():
         else:
             st.dataframe(not_meet_summary, use_container_width=True, hide_index=True)
             st.download_button(
-                "Download Not Meet Summary CSV",
+                "Download Not Meet Site Summary CSV",
                 data=not_meet_summary.to_csv(index=False).encode("utf-8-sig"),
                 file_name="twamp_not_meet_site_summary.csv",
                 mime="text/csv",
@@ -265,12 +300,21 @@ def render_twamp_dashboard():
         else:
             st.dataframe(meet_summary, use_container_width=True, hide_index=True)
             st.download_button(
-                "Download Meet Summary CSV",
+                "Download Meet Site Summary CSV",
                 data=meet_summary.to_csv(index=False).encode("utf-8-sig"),
                 file_name="twamp_meet_site_summary.csv",
                 mime="text/csv",
                 key="twamp_meet_summary_download",
             )
+
+    # Combined download makes it easy to review both site-status lists in Excel.
+    st.download_button(
+        "Download Combined Site Summary CSV",
+        data=site_summary.to_csv(index=False).encode("utf-8-sig"),
+        file_name="twamp_site_summary_meet_not_meet.csv",
+        mime="text/csv",
+        key="twamp_combined_site_summary_download",
+    )
 
     st.subheader("Not Meet Records")
     bad = df[df["_Status"] == "Not Meet"].copy()
