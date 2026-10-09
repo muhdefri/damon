@@ -348,30 +348,14 @@ def render_twamp_dashboard():
         })
 
     condition_summary = pd.DataFrame(condition_rows)
-    # Chart filter must use the exact same site key as Site Condition Summary.
-    # Previously the filter compared summary "Site Display" (often TowerID)
-    # with the raw chart site column (often full eNodeB name), so it returned
-    # no matching sites even when the summary contained that condition.
-    chart_df = df.copy()
-    if tower_col and enodeb_col:
-        tower_values = chart_df[tower_col].fillna("").astype(str).str.strip()
-        use_tower = tower_values.str.upper().str.contains("SUM", regex=False) & tower_values.ne("")
-        chart_df["_ChartSiteDisplay"] = chart_df[enodeb_col].fillna("").astype(str).str.strip()
-        chart_df.loc[use_tower, "_ChartSiteDisplay"] = tower_values.loc[use_tower]
-        chart_df["_ChartSiteDisplay"] = chart_df["_ChartSiteDisplay"].replace("", "Site tidak diketahui")
-    elif tower_col:
-        chart_df["_ChartSiteDisplay"] = chart_df[tower_col].fillna("").astype(str).str.strip()
-        if enodeb_col:
-            fallback = ~chart_df["_ChartSiteDisplay"].str.upper().str.contains("SUM", regex=False)
-            chart_df.loc[fallback, "_ChartSiteDisplay"] = chart_df.loc[fallback, enodeb_col].fillna("").astype(str).str.strip()
-        chart_df["_ChartSiteDisplay"] = chart_df["_ChartSiteDisplay"].replace("", "Site tidak diketahui")
-    elif enodeb_col:
-        chart_df["_ChartSiteDisplay"] = chart_df[enodeb_col].fillna("").astype(str).str.strip()
-        chart_df["_ChartSiteDisplay"] = chart_df["_ChartSiteDisplay"].replace("", "Site tidak diketahui")
-    elif site_col:
-        chart_df["_ChartSiteDisplay"] = chart_df[site_col].fillna("").astype(str).str.strip()
-    else:
-        chart_df["_ChartSiteDisplay"] = "Site tidak diketahui"
+    # Chart uses the exact Site Display column already constructed for the summary.
+    # Do not rebuild site names independently: TowerID may be extracted from
+    # Full eNodeB Name in summary_source when TowerID is blank in the CSV.
+    chart_df = summary_source.copy()
+    chart_df["_ChartSiteDisplay"] = (
+        chart_df["Site Display"].fillna("").astype(str).str.strip()
+        .replace("", "Site tidak diketahui")
+    )
 
     # Use the same Site Condition classifications as the summary table.
     st.subheader("TWAMP Packet Loss")
