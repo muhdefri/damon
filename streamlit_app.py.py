@@ -254,154 +254,65 @@ def render_twamp_dashboard():
         rtt_fig.update_layout(template="plotly_white", height=360, xaxis_title="Date", yaxis_title="RTT (ms)")
         st.plotly_chart(rtt_fig, use_container_width=True)
 
-    st.subheader("Packet Loss Summary — Site per Status")
-    # Export-friendly site summary: keep TowerID and full eNodeB name visible,
-    # and show the actual TWAMP packet-loss value alongside aggregates.
-    tower_name_col = tower_col
-    full_enodeb_col = enodeb_col
+    # ------------------------------------------------------------
+    # Site-level condition summary over the FULL selected interval.
+    # This intentionally replaces the old per-status aggregation:
+    # one site gets one row, classified by daily PL behavior.
+    # KPI dashboard code below this TWAMP module is left untouched.
+    # ------------------------------------------------------------
+    st.subheader("Packet Loss Summary — Site Condition")
+    st.caption(
+        f"Evaluasi periode {start_date:%d %b %Y} – {end_date:%d %b %Y}. "
+        "PL harian memakai nilai maksimum jika ada beberapa record per hari. "
+        "Meet harian: PL ≤ 0,7%; Not Meet harian: PL > 0,7%."
+    )
 
     summary_source = df.copy()
-    if tower_name_col:
-        tower_values = summary_source[tower_name_col].fillna("").astype(str).str.strip()
-        summary_source["TowerID"] = tower_values
+    if tower_col:
+        summary_source["TowerID"] = summary_source[tower_col].fillna("").astype(str).str.strip()
     else:
         summary_source["TowerID"] = ""
-    if full_enodeb_col:
-        summary_source["Full eNodeB Name"] = summary_source[full_enodeb_col].fillna("").astype(str).str.strip()
+
+    if enodeb_col:
+        summary_source["Full eNodeB Name"] = summary_source[enodeb_col].fillna("").astype(str).str.strip()
     elif site_col:
         summary_source["Full eNodeB Name"] = summary_source[site_col].fillna("").astype(str).str.strip()
     else:
         summary_source["Full eNodeB Name"] = ""
-        st.warning("Kolom eNodeB Name tidak terdeteksi. Kolom yang terbaca: " + ", ".join(map(str, raw.columns[:10])))
 
-    # Extract TowerID embedded in the eNodeB name, e.g.
-    # 4251030E_LTE_KINALI#SUM-SB-SPE-0424#MC.
-    # Some exports do not have a dedicated TowerID column.
-    if "TowerID" not in summary_source.columns:
-        summary_source["TowerID"] = ""
-    enodeb_text = summary_source["Full eNodeB Name"].fillna("").astype(str).str.strip()
+    enodeb_text = summary_source["Full eNodeB Name"]
     extracted_tower = enodeb_text.str.extract(r"(SUM-[^#]*)", flags=re.IGNORECASE, expand=False)
-    summary_source["TowerID"] = summary_source["TowerID"].fillna("").astype(str).str.strip()
     missing_tower = summary_source["TowerID"].eq("")
     summary_source.loc[missing_tower, "TowerID"] = extracted_tower[missing_tower].fillna("")
-    # Display the SUM TowerID when present; otherwise display the full eNodeB name.
-    use_tower = summary_source["TowerID"].str.upper().str.startswith("SUM-") & summary_source["TowerID"].ne("")
-    summary_source["Site Display"] = enodeb_text
-    summary_source.loc[use_tower, "Site Display"] = summary_source.loc[use_tower, "TowerID"]
+    has_sum_tower = summary_source["TowerID"].str.upper().str.startswith("SUM-") & summary_source["TowerID"].ne("")
+    summary_source["Site Display"] = summary_source["Full eNodeB Name"]
+    summary_source.loc[has_sum_tower, "Site Display"] = summary_source.loc[has_sum_tower, "TowerID"]
     summary_source["Site Display"] = summary_source["Site Display"].replace("", "Site tidak diketahui")
+    summary_source["_Day"] = summary_source["_Date"].dt.normalize()
 
-    def _site_status_summary(source):
-        rows = []
-        for (site_display, status), group in source.groupby(["Site Display", "_Status"], dropna=False):
-            group = group.sort_values("_Date")
-            latest = group.iloc[-1]
-            tower_vals = group["TowerID"].dropna().astype(str)
-            enodeb_vals = group["Full eNodeB Name"].dropna().astype(str)
-            rows.append({
-                "TowerID": next((v for v in tower_vals if v.strip()), ""),
-                "Full eNodeB Name": next((v for v in enodeb_vals if v.strip()), ""),
-                "Site Display": site_display,
-                "Status": status,
-                "Records": int(len(group)),
-                "Latest Date": latest["_Date"].strftime("%Y-%m-%d"),
-                "Latest_PL_Percent": float(latest["_PacketLoss"]),
-                "Average_PL_Percent": float(group["_PacketLoss"].mean()),
-                "Max_PL_Percent": float(group["_PacketLoss"].max()),
-            })
-        columns = ["TowerID", "Full eNodeB Name", "Site Display", "Status", "Records",
-                   "Latest Date", "Latest_PL_Percent", "Average_PL_Percent", "Max_PL_Percent"]
-        return pd.DataFrame(rows, columns=columns)
-
-    site_summary = _site_status_summary(summary_source)
-    meet_summary = site_summary[site_summary["Status"] == "Meet"].sort_values(
-        ["Site Display", "Latest Date"]
-    )
-    not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"].sort_values(
-        ["Max_PL_Percent", "Records"], ascending=[False, False]
-    )
-
-    # Add a simple row number to make site lists easier to count and reference.
-    meet_summary.insert(0, "No", range(1, len(meet_summary) + 1))
-    not_meet_summary.insert(0, "No", range(1, len(not_meet_summary) + 1))
-    site_summary = site_summary.sort_values(
-        ["Status", "Site Display"], ascending=[True, True]
-    ).copy()
-    site_summary.insert(0, "No", site_summary.groupby("Status").cumcount() + 1)
-
-    left_summary, right_summary = st.columns(2)
-    with left_summary:
-        st.markdown("### Not Meet Sites")
-        if not_meet_summary.empty:
-            st.success("Tidak ada site Not Meet pada filter saat ini.")
-        else:
-            st.dataframe(not_meet_summary, use_container_width=True, hide_index=True)
-            st.download_button(
-                "Download Not Meet Site Summary CSV",
-                data=not_meet_summary.to_csv(index=False).encode("utf-8-sig"),
-                file_name="twamp_not_meet_site_summary.csv",
-                mime="text/csv",
-                key="twamp_not_meet_summary_download",
-            )
-    with right_summary:
-        st.markdown("### Meet Sites")
-        if meet_summary.empty:
-            st.warning("Tidak ada site Meet pada filter saat ini.")
-        else:
-            st.dataframe(meet_summary, use_container_width=True, hide_index=True)
-            st.download_button(
-                "Download Meet Site Summary CSV",
-                data=meet_summary.to_csv(index=False).encode("utf-8-sig"),
-                file_name="twamp_meet_site_summary.csv",
-                mime="text/csv",
-                key="twamp_meet_summary_download",
-            )
-
-    # Combined download makes it easy to review both site-status lists in Excel.
-    st.download_button(
-        "Download Combined Site Summary CSV",
-        data=site_summary.to_csv(index=False).encode("utf-8-sig"),
-        file_name="twamp_site_summary_meet_not_meet.csv",
-        mime="text/csv",
-        key="twamp_combined_site_summary_download",
-    )
-
-    # ------------------------------------------------------------
-    # 7-day site condition: distinguish occasional spikes from
-    # recurring/sustained packet loss. If multiple records exist on a
-    # calendar day, use the daily maximum so a short spike is not hidden.
-    # ------------------------------------------------------------
-    st.subheader("Site Condition — Rolling 7 Days")
-    st.caption(
-        "Klasifikasi awal: 0 hari Not Meet = Normal; 1 hari = Spike; "
-        "2–3 hari = Recurring High; ≥4 hari = Persistent High. "
-        "Jika ada beberapa record dalam satu hari, PL harian memakai nilai maksimum."
-    )
-    condition_source = df.copy()
-    condition_source["_Day"] = condition_source["_Date"].dt.normalize()
-    # Rolling 7-day window ends at the manually selected End Date.
-    # The selected interval still controls summary/detail tables; this
-    # condition view uses the final 7 calendar days ending at End Date.
-    latest_day = pd.Timestamp(end_date)
-    window_start = latest_day - pd.Timedelta(days=6)
-    condition_source = condition_source[
-        condition_source["_Day"].between(window_start, latest_day)
-    ]
-
+    # Daily maximum ensures brief PL spikes are not hidden by averaging.
     daily = (
-        condition_source.groupby([site_col, "_Day"], dropna=False)["_PacketLoss"]
+        summary_source.groupby(["Site Display", "_Day"], dropna=False)["_PacketLoss"]
         .max()
         .reset_index(name="Daily_Max_PL_Percent")
     )
     daily["_Daily_Not_Meet"] = daily["Daily_Max_PL_Percent"] > target
 
+    period_start = pd.Timestamp(start_date)
+    period_end = pd.Timestamp(end_date)
+    total_calendar_days = (period_end - period_start).days + 1
     condition_rows = []
-    for site_name, grp in daily.groupby(site_col, dropna=False):
+
+    for site_name, grp in daily.groupby("Site Display", dropna=False):
         grp = grp.sort_values("_Day")
+        site_rows = summary_source[summary_source["Site Display"].astype(str) == str(site_name)]
         bad_days = set(grp.loc[grp["_Daily_Not_Meet"], "_Day"].tolist())
-        not_meet_days = len(bad_days)
-        consecutive = 0
         observed_days = set(grp["_Day"].tolist())
-        cursor = latest_day
+        not_meet_days = len(bad_days)
+
+        # Consecutive Not Meet days ending at the selected End Date.
+        consecutive = 0
+        cursor = period_end
         while cursor in observed_days and cursor in bad_days:
             consecutive += 1
             cursor -= pd.Timedelta(days=1)
@@ -415,33 +326,45 @@ def render_twamp_dashboard():
         else:
             condition = "Persistent High"
 
-        site_rows = condition_source[condition_source[site_col].astype(str) == str(site_name)]
-        enodeb_value = ""
-        if enodeb_col and enodeb_col in site_rows.columns:
-            enodeb_value = next(
-                (str(v).strip() for v in site_rows[enodeb_col].dropna() if str(v).strip()), ""
-            )
-        tower_value = ""
-        if tower_col and tower_col in site_rows.columns:
-            tower_value = next(
-                (str(v).strip() for v in site_rows[tower_col].dropna() if str(v).strip()), ""
-            )
-        if not tower_value:
-            match = re.search(r"(SUM-[^#]*)", enodeb_value, flags=re.IGNORECASE)
-            tower_value = match.group(1) if match else ""
+        daily_sorted = grp.sort_values("_Day")
+        latest_day_row = daily_sorted.iloc[-1]
+        latest_date = latest_day_row["_Day"]
+        latest_pl = float(latest_day_row["Daily_Max_PL_Percent"])
+        previous_rows = daily_sorted[daily_sorted["_Day"] < latest_date]
+        if previous_rows.empty:
+            trend = "Insufficient history"
+            change = None
+        else:
+            previous_pl = float(previous_rows.iloc[-1]["Daily_Max_PL_Percent"])
+            change = latest_pl - previous_pl
+            if change < -1e-12:
+                trend = "Improving"
+            elif change > 1e-12:
+                trend = "Worsening"
+            else:
+                trend = "Unchanged"
+
+        tower_vals = site_rows["TowerID"].dropna().astype(str).str.strip()
+        enodeb_vals = site_rows["Full eNodeB Name"].dropna().astype(str).str.strip()
+        tower_value = next((v for v in tower_vals if v), "")
+        enodeb_value = next((v for v in enodeb_vals if v), "")
 
         condition_rows.append({
             "TowerID": tower_value,
             "Full eNodeB Name": enodeb_value or str(site_name),
             "Site Display": str(site_name),
-            "Window Start": window_start.strftime("%Y-%m-%d"),
-            "Window End": latest_day.strftime("%Y-%m-%d"),
+            "Period Start": period_start.strftime("%Y-%m-%d"),
+            "Period End": period_end.strftime("%Y-%m-%d"),
             "Days With Data": int(grp["_Day"].nunique()),
-            "Missing Days (7d)": int(7 - grp["_Day"].nunique()),
-            "Not Meet Days (7d)": not_meet_days,
-            "Not Meet Days (%)": round(not_meet_days / 7 * 100, 2),
-            "Consecutive Not Meet Days": consecutive,
-            "Max Daily PL (%)": float(grp["Daily_Max_PL_Percent"].max()),
+            "Missing Days": int(max(total_calendar_days - grp["_Day"].nunique(), 0)),
+            "Not Meet Days": int(not_meet_days),
+            "Not Meet Days (%)": round(not_meet_days / total_calendar_days * 100, 2),
+            "Consecutive Not Meet Days at End": int(consecutive),
+            "Latest Data Date": latest_date.strftime("%Y-%m-%d"),
+            "Latest Daily Max PL (%)": latest_pl,
+            "Max PL in Period (%)": float(grp["Daily_Max_PL_Percent"].max()),
+            "PL Trend vs Previous Available Day": trend,
+            "PL Change (percentage points)": change,
             "Site Condition": condition,
         })
 
@@ -452,19 +375,40 @@ def render_twamp_dashboard():
         }
         condition_summary["_order"] = condition_summary["Site Condition"].map(condition_order)
         condition_summary = condition_summary.sort_values(
-            ["_order", "Not Meet Days (7d)", "Max Daily PL (%)"],
+            ["_order", "Not Meet Days", "Max PL in Period (%)"],
             ascending=[True, False, False],
-        ).drop(columns="_order")
+        ).drop(columns="_order").reset_index(drop=True)
+        condition_summary.insert(0, "No", range(1, len(condition_summary) + 1))
+
         st.dataframe(condition_summary, use_container_width=True, hide_index=True)
+
         st.download_button(
-            "Download 7-Day Site Condition CSV",
+            "Download Site Condition Summary CSV",
             data=condition_summary.to_csv(index=False).encode("utf-8-sig"),
-            file_name="twamp_site_condition_7day.csv",
+            file_name="twamp_site_condition_selected_period.csv",
             mime="text/csv",
-            key="twamp_7day_condition_download",
+            key="twamp_selected_period_condition_download",
         )
+
+        # Convenient status-specific downloads retain the same whole-period
+        # classification rather than splitting individual measurements by status.
+        for condition_name, file_stub in [
+            ("Persistent High", "persistent_high"),
+            ("Recurring High", "recurring_high"),
+            ("Spike", "spike"),
+            ("Normal", "normal"),
+        ]:
+            subset = condition_summary[condition_summary["Site Condition"] == condition_name]
+            if not subset.empty:
+                st.download_button(
+                    f"Download {condition_name} Sites CSV",
+                    data=subset.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"twamp_{file_stub}_sites.csv",
+                    mime="text/csv",
+                    key=f"twamp_condition_{file_stub}_download",
+                )
     else:
-        st.info("Belum ada data untuk klasifikasi kondisi site 7 hari.")
+        st.info("Belum ada data untuk summary kondisi site pada periode terpilih.")
 
     st.subheader("Not Meet Records")
     bad = df[df["_Status"] == "Not Meet"].copy()
