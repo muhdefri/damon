@@ -106,12 +106,43 @@ def render_twamp_dashboard():
         return
 
     date_col = next((c for c in raw.columns if c.strip().lower() in {"date", "datetime", "timestamp", "time"}), None)
-    site_col = next((c for c in raw.columns if c.strip().lower() in {"enodeb name", "site name", "site", "enodeb"}), None)
+
+    # Prefer TowerID such as SUM-SB-SPE-0424. If it is absent or the value
+    # does not contain the SUM site code, fall back to the full eNodeB name.
+    def _norm_col(value):
+        return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+    tower_col = next((c for c in raw.columns if _norm_col(c) in {
+        "towerid", "tower", "siteid", "sitecode"
+    }), None)
+    enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
+        "fullenodebname", "enodebname", "fullenodeb", "enodeb"
+    }), None)
+    site_col = tower_col or enodeb_col or next(
+        (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
+    )
     if date_col is None:
         st.error("Kolom tanggal tidak ditemukan. Dashboard membutuhkan kolom Date/Datetime.")
         return
 
     df = raw.copy()
+    if tower_col and enodeb_col:
+        tower_values = df[tower_col].fillna("").astype(str).str.strip()
+        use_tower = tower_values.str.upper().str.contains("SUM", regex=False) & tower_values.ne("")
+        df["_DisplaySite"] = df[enodeb_col].fillna("").astype(str).str.strip()
+        df.loc[use_tower, "_DisplaySite"] = tower_values.loc[use_tower]
+        df["_DisplaySite"] = df["_DisplaySite"].replace("", "Site tidak diketahui")
+        site_col = "_DisplaySite"
+    elif tower_col:
+        df["_DisplaySite"] = df[tower_col].fillna("").astype(str).str.strip()
+        if enodeb_col:
+            fallback = ~df["_DisplaySite"].str.upper().str.contains("SUM", regex=False)
+            df.loc[fallback, "_DisplaySite"] = df.loc[fallback, enodeb_col].fillna("").astype(str).str.strip()
+        site_col = "_DisplaySite"
+    elif enodeb_col:
+        df["_DisplaySite"] = df[enodeb_col].fillna("").astype(str).str.strip()
+        site_col = "_DisplaySite"
+
     df["_Date"] = pd.to_datetime(df[date_col], errors="coerce")
     df["_PacketLoss"] = pd.to_numeric(df[packet_loss_col].astype(str).str.replace("%", "", regex=False).str.strip(), errors="coerce")
     df = df.dropna(subset=["_Date", "_PacketLoss"]).sort_values("_Date")
@@ -189,16 +220,57 @@ def render_twamp_dashboard():
         rtt_fig.update_layout(template="plotly_white", height=360, xaxis_title="Date", yaxis_title="RTT (ms)")
         st.plotly_chart(rtt_fig, use_container_width=True)
 
-    st.subheader("Packet Loss Summary")
-    summary_cols = ["_Status"]
-    summary = df.groupby("_Status", dropna=False).agg(
-        Records=("_PacketLoss", "size"),
-        Average_PL_Percent=("_PacketLoss", "mean"),
-        Max_PL_Percent=("_PacketLoss", "max"),
-    ).reset_index()
-    summary = summary.rename(columns={"_Status": "Status"})
-    summary["Share_Percent"] = summary["Records"] / total * 100
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.subheader("Packet Loss Summary — Site per Status")
+    # Separate Meet and Not Meet tables, each with the site identifier visible.
+    site_display_col = site_col if site_col else None
+    if site_display_col:
+        site_summary = df.groupby([site_display_col, "_Status"], dropna=False).agg(
+            Records=("_PacketLoss", "size"),
+            Average_PL_Percent=("_PacketLoss", "mean"),
+            Max_PL_Percent=("_PacketLoss", "max"),
+        ).reset_index().rename(columns={site_display_col: "TowerID / Full eNodeB Name", "_Status": "Status"})
+        meet_summary = site_summary[site_summary["Status"] == "Meet"].sort_values(
+            ["Max_PL_Percent", "Records"], ascending=[True, False]
+        )
+        not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"].sort_values(
+            ["Max_PL_Percent", "Records"], ascending=[False, False]
+        )
+    else:
+        site_summary = df.groupby("_Status", dropna=False).agg(
+            Records=("_PacketLoss", "size"),
+            Average_PL_Percent=("_PacketLoss", "mean"),
+            Max_PL_Percent=("_PacketLoss", "max"),
+        ).reset_index().rename(columns={"_Status": "Status"})
+        meet_summary = site_summary[site_summary["Status"] == "Meet"]
+        not_meet_summary = site_summary[site_summary["Status"] == "Not Meet"]
+
+    left_summary, right_summary = st.columns(2)
+    with left_summary:
+        st.markdown("### Not Meet Sites")
+        if not_meet_summary.empty:
+            st.success("Tidak ada site Not Meet pada filter saat ini.")
+        else:
+            st.dataframe(not_meet_summary, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download Not Meet Summary CSV",
+                data=not_meet_summary.to_csv(index=False).encode("utf-8-sig"),
+                file_name="twamp_not_meet_site_summary.csv",
+                mime="text/csv",
+                key="twamp_not_meet_summary_download",
+            )
+    with right_summary:
+        st.markdown("### Meet Sites")
+        if meet_summary.empty:
+            st.warning("Tidak ada site Meet pada filter saat ini.")
+        else:
+            st.dataframe(meet_summary, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download Meet Summary CSV",
+                data=meet_summary.to_csv(index=False).encode("utf-8-sig"),
+                file_name="twamp_meet_site_summary.csv",
+                mime="text/csv",
+                key="twamp_meet_summary_download",
+            )
 
     st.subheader("Not Meet Records")
     bad = df[df["_Status"] == "Not Meet"].copy()
@@ -214,9 +286,9 @@ def render_twamp_dashboard():
             use_container_width=True, hide_index=True,
         )
         st.download_button(
-            "Download Not Meet CSV",
+            "Download Not Meet Records CSV",
             data=bad[display_cols].to_csv(index=False).encode("utf-8-sig"),
-            file_name="twamp_packet_loss_not_meet.csv",
+            file_name="twamp_packet_loss_not_meet_records.csv",
             mime="text/csv",
         )
 
