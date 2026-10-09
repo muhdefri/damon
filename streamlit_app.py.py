@@ -22,8 +22,197 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("📡 RAN KPI Dashboard")
-st.caption("Test version — CSV / CSV.GZ")
+# Dashboard selector is separate from the existing RAN KPI logic.
+_dashboard_mode = st.sidebar.selectbox(
+    "Dashboard",
+    ["RAN KPI Dashboard", "TWAMP Packet Loss"],
+    key="dashboard_mode_selector",
+)
+if _dashboard_mode == "RAN KPI Dashboard":
+    st.title("📡 RAN KPI Dashboard")
+    st.caption("Test version — CSV / CSV.GZ")
+
+# ============================================================
+# OPTIONAL TWAMP PACKET LOSS DASHBOARD
+# ============================================================
+def render_twamp_dashboard():
+    st.title("📡 TWAMP Packet Loss Dashboard")
+    st.caption("Packet Loss target: 0.7% | Meet: ≤ 0.7% | Not Meet: > 0.7%")
+
+    twamp_file = st.sidebar.file_uploader(
+        "Upload TWAMP CSV / CSV.GZ",
+        type=["csv", "gz"],
+        key="twamp_csv_uploader",
+        help="Upload the TWAMP export as .csv or .csv.gz.",
+    )
+    if twamp_file is None:
+        st.info("Upload file TWAMP CSV / CSV.GZ dari sidebar. Dashboard KPI RAN tetap tersedia melalui pilihan Dashboard.")
+        return
+
+    try:
+        filename = twamp_file.name.lower().strip()
+        compression = "gzip" if filename.endswith(".csv.gz") else None
+        raw = pd.read_csv(twamp_file, compression=compression, low_memory=False)
+    except Exception as exc:
+        st.error(f"Gagal membaca file TWAMP: {exc}")
+        return
+
+    raw.columns = [str(c).strip() for c in raw.columns]
+    packet_loss_col = "VS.BSTWAMP.RoundTrip.DropMeans(%)"
+    if packet_loss_col not in raw.columns:
+        # Accept a header with the same KPI name but without the unit suffix.
+        candidates = [
+            c for c in raw.columns
+            if str(c).strip().lower() in {
+                "vs.bstwamp.roundtrip.dropmeans",
+                "vs.bstwamp.roundtrip.dropmeans(%)",
+            }
+        ]
+        if candidates:
+            packet_loss_col = candidates[0]
+        else:
+            st.error(
+                "Kolom Packet Loss tidak ditemukan. Kolom yang dicari: "
+                "`VS.BSTWAMP.RoundTrip.DropMeans(%)`."
+            )
+            st.write("Kolom tersedia:", list(raw.columns))
+            return
+
+    date_col = next((c for c in raw.columns if c.strip().lower() in {"date", "datetime", "timestamp", "time"}), None)
+    site_col = next((c for c in raw.columns if c.strip().lower() in {"enodeb name", "site name", "site", "enodeb"}), None)
+    if date_col is None:
+        st.error("Kolom tanggal tidak ditemukan. Dashboard membutuhkan kolom Date/Datetime.")
+        return
+
+    df = raw.copy()
+    df["_Date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df["_PacketLoss"] = pd.to_numeric(df[packet_loss_col].astype(str).str.replace("%", "", regex=False).str.strip(), errors="coerce")
+    df = df.dropna(subset=["_Date", "_PacketLoss"]).sort_values("_Date")
+    if df.empty:
+        st.warning("Tidak ada data tanggal dan Packet Loss numerik yang valid.")
+        return
+
+    target = 0.7
+    df["_Status"] = df["_PacketLoss"].le(target).map({True: "Meet", False: "Not Meet"})
+
+    # Filters are intentionally scoped to the TWAMP module only.
+    with st.sidebar:
+        st.subheader("TWAMP Filters")
+        if site_col:
+            site_values = sorted(df[site_col].dropna().astype(str).unique().tolist())
+            selected_sites = st.multiselect("Site / eNodeB", site_values, default=site_values)
+            if selected_sites:
+                df = df[df[site_col].astype(str).isin(selected_sites)]
+        min_date = df["_Date"].min().date()
+        max_date = df["_Date"].max().date()
+        date_options = sorted(df["_Date"].dt.date.unique())
+        date_options = [pd.Timestamp(d).date() for d in date_options]
+        if len(date_options) > 1:
+            date_range = st.select_slider(
+                "Date range",
+                options=date_options,
+                value=(min_date, max_date),
+                format_func=lambda d: d.strftime("%d %b %Y"),
+            )
+            df = df[df["_Date"].dt.date.between(date_range[0], date_range[1])]
+
+    if df.empty:
+        st.warning("Tidak ada data setelah filter dipilih.")
+        return
+
+    total = len(df)
+    not_meet = int((df["_Status"] == "Not Meet").sum())
+    meet = total - not_meet
+    avg_pl = float(df["_PacketLoss"].mean())
+    max_pl = float(df["_PacketLoss"].max())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Records", f"{total:,}")
+    c2.metric("Meet (≤ 0.7%)", f"{meet:,}", f"{meet / total * 100:.1f}%")
+    c3.metric("Not Meet (> 0.7%)", f"{not_meet:,}", f"{not_meet / total * 100:.1f}%", delta_color="inverse")
+    c4.metric("Average Packet Loss", f"{avg_pl:.4f}%")
+
+    st.subheader("Packet Loss Trend")
+    fig = go.Figure()
+    trace_name = site_col if site_col else None
+    if trace_name:
+        for site_name, grp in df.groupby(trace_name, dropna=False):
+            fig.add_trace(go.Scatter(
+                x=grp["_Date"], y=grp["_PacketLoss"], mode="lines+markers",
+                name=str(site_name), line=dict(width=2),
+                hovertemplate="%{x}<br>Packet Loss: %{y:.4f}%<extra>%{fullData.name}</extra>",
+            ))
+    else:
+        fig.add_trace(go.Scatter(x=df["_Date"], y=df["_PacketLoss"], mode="lines+markers", name="Packet Loss"))
+    fig.add_hline(y=target, line_dash="dash", line_color="red",
+                  annotation_text="Target PL 0.7%", annotation_position="top left")
+    fig.update_layout(
+        template="plotly_white", height=520,
+        xaxis_title="Date", yaxis_title="Packet Loss (%)",
+        hovermode="x unified", legend_title_text="Site / eNodeB",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Optional RTT chart, when the TWAMP export includes this KPI.
+    rtt_col = "VS.BSTWAMP.Rtt.Means(ms)"
+    if rtt_col in df.columns:
+        st.subheader("Average RTT")
+        rtt = pd.to_numeric(df[rtt_col], errors="coerce")
+        rtt_fig = go.Figure()
+        rtt_fig.add_trace(go.Scatter(x=df["_Date"], y=rtt, mode="lines+markers", name="Average RTT (ms)"))
+        rtt_fig.update_layout(template="plotly_white", height=360, xaxis_title="Date", yaxis_title="RTT (ms)")
+        st.plotly_chart(rtt_fig, use_container_width=True)
+
+    st.subheader("Packet Loss Summary")
+    summary_cols = ["_Status"]
+    summary = df.groupby("_Status", dropna=False).agg(
+        Records=("_PacketLoss", "size"),
+        Average_PL_Percent=("_PacketLoss", "mean"),
+        Max_PL_Percent=("_PacketLoss", "max"),
+    ).reset_index()
+    summary = summary.rename(columns={"_Status": "Status"})
+    summary["Share_Percent"] = summary["Records"] / total * 100
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    st.subheader("Not Meet Records")
+    bad = df[df["_Status"] == "Not Meet"].copy()
+    display_cols = [date_col]
+    if site_col:
+        display_cols.append(site_col)
+    display_cols += [packet_loss_col, "_Status"]
+    if bad.empty:
+        st.success("Tidak ada record Not Meet pada filter saat ini.")
+    else:
+        st.dataframe(
+            bad[display_cols].sort_values(by=packet_loss_col, ascending=False),
+            use_container_width=True, hide_index=True,
+        )
+        st.download_button(
+            "Download Not Meet CSV",
+            data=bad[display_cols].to_csv(index=False).encode("utf-8-sig"),
+            file_name="twamp_packet_loss_not_meet.csv",
+            mime="text/csv",
+        )
+
+    with st.expander("View all TWAMP records"):
+        show_cols = [date_col]
+        if site_col:
+            show_cols.append(site_col)
+        show_cols += [packet_loss_col, "_Status"]
+        if rtt_col in df.columns:
+            show_cols.append(rtt_col)
+        st.dataframe(df[show_cols], use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download filtered TWAMP CSV",
+            data=df[show_cols].to_csv(index=False).encode("utf-8-sig"),
+            file_name="twamp_packet_loss_filtered.csv",
+            mime="text/csv",
+        )
+
+
+if _dashboard_mode == "TWAMP Packet Loss":
+    render_twamp_dashboard()
+    st.stop()
+
 
 
 # ============================================================
