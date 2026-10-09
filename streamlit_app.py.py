@@ -423,7 +423,7 @@ def render_twamp_dashboard():
             grp = grp.sort_values("_Date")
             fig.add_trace(go.Scatter(
                 x=grp["_Date"], y=grp["_PacketLoss"], mode="lines+markers",
-                name=str(site_name), line=dict(width=2),
+                name=str(site_name), showlegend=True, line=dict(width=2),
                 hovertemplate="%{x}<br>Packet Loss: %{y:.4f}%<extra>%{fullData.name}</extra>",
             ))
 
@@ -433,13 +433,14 @@ def render_twamp_dashboard():
     )
     fig.update_layout(
         template="plotly_white",
+        showlegend=True,
         height=520,
         autosize=True,
         xaxis_title="Date / Time" if active_resolution == "Hourly" else "Date",
         yaxis_title="Packet Loss (%)",
         hovermode="x unified",
         legend_title_text="Site / eNodeB",
-        margin=dict(l=8, r=8, t=24, b=42),
+        margin=dict(l=8, r=8, t=24, b=72),
         legend=dict(
             orientation="h",
             yanchor="top",
