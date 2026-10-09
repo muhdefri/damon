@@ -1880,6 +1880,60 @@ with st.spinner("Preparing KPI CSV..."):
             kpi_actual_columns[kpi_name] = actual_col
 
     # --------------------------------------------------------
+    # AUTO-DISCOVER additional numeric KPI columns from new CSVs.
+    # Keep curated KPI_CONFIG entries unchanged; expose any new
+    # numeric source columns under an "Auto: <header>" menu label.
+    # --------------------------------------------------------
+    _known_source_columns = set(kpi_actual_columns.values())
+    _non_kpi_columns = {
+        enodeb_col, cell_col, localcell_col, date_col, time_col,
+        "Integrity",
+    }
+    _sample_frame = pd.read_csv(
+        io.BytesIO(file_bytes),
+        compression=input_compression,
+        nrows=100,
+        low_memory=False,
+    )
+    _sample_frame.columns = [str(c).strip() for c in _sample_frame.columns]
+
+    for _header in csv_headers:
+        _header = str(_header).strip()
+        if (
+            _header in _known_source_columns
+            or _header in _non_kpi_columns
+            or _header.startswith("L.RA.TA.UE.Index")
+            or _header.startswith("_")
+            or _header not in _sample_frame.columns
+        ):
+            continue
+
+        _raw_sample = _sample_frame[_header]
+        _nonblank = _raw_sample.notna() & _raw_sample.astype(str).str.strip().ne("")
+        if int(_nonblank.sum()) < 2:
+            continue
+
+        _numeric_sample = parse_kpi_numeric(_raw_sample)
+        _numeric_ratio = float(_numeric_sample[_nonblank].notna().mean())
+        # Require most populated sample values to be numeric to avoid
+        # exposing textual labels as KPIs.
+        if _numeric_ratio < 0.80:
+            continue
+
+        _menu_name = f"Auto: {_header}"
+        if _menu_name in KPI_CONFIG:
+            continue
+
+        _unit = "%" if ("%" in _header or "(%)" in _header) else ""
+        KPI_CONFIG[_menu_name] = {
+            "column": _header,
+            "category": "Auto-detected",
+            "unit": _unit,
+        }
+        kpi_actual_columns[_menu_name] = _header
+        _known_source_columns.add(_header)
+
+    # --------------------------------------------------------
     # Read only columns required by the dashboard.
     # This avoids loading unused raw KPI columns.
     # --------------------------------------------------------
