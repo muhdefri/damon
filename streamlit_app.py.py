@@ -243,9 +243,19 @@ def render_twamp_dashboard():
     else:
         summary_source["Full eNodeB Name"] = ""
 
-    # Prefer SUM TowerID when present; otherwise identify the site by full eNodeB name.
-    use_tower = summary_source["TowerID"].str.upper().str.contains("SUM", regex=False) & summary_source["TowerID"].ne("")
-    summary_source["Site Display"] = summary_source["Full eNodeB Name"]
+    # Extract TowerID embedded in the eNodeB name, e.g.
+    # 4251030E_LTE_KINALI#SUM-SB-SPE-0424#MC.
+    # Some exports do not have a dedicated TowerID column.
+    if "TowerID" not in summary_source.columns:
+        summary_source["TowerID"] = ""
+    enodeb_text = summary_source["Full eNodeB Name"].fillna("").astype(str).str.strip()
+    extracted_tower = enodeb_text.str.extract(r"#(SUM-[^#]+)#", flags=re.IGNORECASE, expand=False)
+    summary_source["TowerID"] = summary_source["TowerID"].fillna("").astype(str).str.strip()
+    missing_tower = summary_source["TowerID"].eq("")
+    summary_source.loc[missing_tower, "TowerID"] = extracted_tower[missing_tower].fillna("")
+    # Display the SUM TowerID when present; otherwise display the full eNodeB name.
+    use_tower = summary_source["TowerID"].str.upper().str.startswith("SUM-") & summary_source["TowerID"].ne("")
+    summary_source["Site Display"] = enodeb_text
     summary_source.loc[use_tower, "Site Display"] = summary_source.loc[use_tower, "TowerID"]
     summary_source["Site Display"] = summary_source["Site Display"].replace("", "Site tidak diketahui")
 
