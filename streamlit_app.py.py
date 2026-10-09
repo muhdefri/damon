@@ -105,7 +105,20 @@ def render_twamp_dashboard():
         st.write("Contoh header terbaca:", [str(c) for c in raw.columns[:12]])
         return
 
-    date_col = next((c for c in raw.columns if c.strip().lower() in {"date", "datetime", "timestamp", "time"}), None)
+    # Support daily exports (Date), combined timestamps (Datetime/Timestamp),
+    # and hourly exports where Date and Time are separate columns.
+    date_col = next(
+        (c for c in raw.columns if c.strip().lower() in {"datetime", "timestamp"}),
+        None,
+    )
+    if date_col is None:
+        date_col = next((c for c in raw.columns if c.strip().lower() == "date"), None)
+    time_col = next(
+        (c for c in raw.columns if c.strip().lower() in {"time", "hour", "hourly"}),
+        None,
+    )
+    if date_col is None and time_col is not None:
+        date_col = time_col
 
     # Prefer TowerID such as SUM-SB-SPE-0424. If it is absent or the value
     # does not contain the SUM site code, fall back to the full eNodeB name.
@@ -156,7 +169,16 @@ def render_twamp_dashboard():
         df["_DisplaySite"] = df[enodeb_col].fillna("").astype(str).str.strip()
         site_col = "_DisplaySite"
 
-    df["_Date"] = pd.to_datetime(df[date_col], errors="coerce")
+    if time_col is not None and date_col is not None and time_col != date_col and date_col.strip().lower() == "date":
+        # Combine separate Date + Time fields into a real timestamp for hourly charts.
+        df["_Date"] = pd.to_datetime(
+            df[date_col].astype(str).str.strip()
+            + " "
+            + df[time_col].astype(str).str.strip(),
+            errors="coerce",
+        )
+    else:
+        df["_Date"] = pd.to_datetime(df[date_col], errors="coerce")
     df["_PacketLoss"] = pd.to_numeric(df[packet_loss_col].astype(str).str.replace("%", "", regex=False).str.strip(), errors="coerce")
     df = df.dropna(subset=["_Date", "_PacketLoss"]).sort_values("_Date")
     if df.empty:
@@ -171,6 +193,13 @@ def render_twamp_dashboard():
     # use the same selected interval.
     with st.sidebar:
         st.subheader("TWAMP Filters")
+        chart_resolution = st.selectbox(
+            "Data Resolution",
+            ["Auto Detect", "Daily", "Hourly"],
+            index=0,
+            key="twamp_data_resolution",
+            help="Auto Detect mengikuti timestamp pada CSV. Hourly mempertahankan waktu pengukuran; Daily merangkum nilai maksimum per site per hari.",
+        )
         if site_col:
             site_values = sorted(df[site_col].dropna().astype(str).unique().tolist())
             selected_sites = st.multiselect(
@@ -211,6 +240,13 @@ def render_twamp_dashboard():
     if df.empty:
         st.warning("Tidak ada data setelah filter dipilih.")
         return
+
+    has_intraday_timestamps = bool((df["_Date"] != df["_Date"].dt.normalize()).any())
+    if chart_resolution == "Auto Detect":
+        active_resolution = "Hourly" if has_intraday_timestamps else "Daily"
+    else:
+        active_resolution = chart_resolution
+    st.caption(f"Resolusi chart TWAMP: **{active_resolution}**")
 
     total = len(df)
     not_meet = int((df["_Status"] == "Not Meet").sum())
@@ -356,6 +392,13 @@ def render_twamp_dashboard():
         chart_df["Site Display"].fillna("").astype(str).str.strip()
         .replace("", "Site tidak diketahui")
     )
+    if active_resolution == "Daily":
+        chart_df["_ChartDay"] = chart_df["_Date"].dt.normalize()
+        chart_df = (
+            chart_df.groupby(["_ChartSiteDisplay", "_ChartDay"], as_index=False)["_PacketLoss"]
+            .max()
+            .rename(columns={"_ChartDay": "_Date"})
+        )
 
     # Use the same Site Condition classifications as the summary table.
     st.subheader("TWAMP Packet Loss")
@@ -392,7 +435,7 @@ def render_twamp_dashboard():
         template="plotly_white",
         height=520,
         autosize=True,
-        xaxis_title="Date",
+        xaxis_title="Date / Time" if active_resolution == "Hourly" else "Date",
         yaxis_title="Packet Loss (%)",
         hovermode="x unified",
         legend_title_text="Site / eNodeB",
