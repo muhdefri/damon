@@ -336,6 +336,102 @@ def render_twamp_dashboard():
         key="twamp_combined_site_summary_download",
     )
 
+    # ------------------------------------------------------------
+    # 7-day site condition: distinguish occasional spikes from
+    # recurring/sustained packet loss. If multiple records exist on a
+    # calendar day, use the daily maximum so a short spike is not hidden.
+    # ------------------------------------------------------------
+    st.subheader("Site Condition — Rolling 7 Days")
+    st.caption(
+        "Klasifikasi awal: 0 hari Not Meet = Normal; 1 hari = Spike; "
+        "2–3 hari = Recurring High; ≥4 hari = Persistent High. "
+        "Jika ada beberapa record dalam satu hari, PL harian memakai nilai maksimum."
+    )
+    condition_source = df.copy()
+    condition_source["_Day"] = condition_source["_Date"].dt.normalize()
+    latest_day = condition_source["_Day"].max()
+    window_start = latest_day - pd.Timedelta(days=6)
+    condition_source = condition_source[
+        condition_source["_Day"].between(window_start, latest_day)
+    ]
+
+    daily = (
+        condition_source.groupby([site_col, "_Day"], dropna=False)["_PacketLoss"]
+        .max()
+        .reset_index(name="Daily_Max_PL_Percent")
+    )
+    daily["_Daily_Not_Meet"] = daily["Daily_Max_PL_Percent"] > target
+
+    condition_rows = []
+    for site_name, grp in daily.groupby(site_col, dropna=False):
+        grp = grp.sort_values("_Day")
+        bad_days = set(grp.loc[grp["_Daily_Not_Meet"], "_Day"].tolist())
+        not_meet_days = len(bad_days)
+        consecutive = 0
+        cursor = latest_day
+        while cursor in bad_days:
+            consecutive += 1
+            cursor -= pd.Timedelta(days=1)
+
+        if not_meet_days == 0:
+            condition = "Normal"
+        elif not_meet_days == 1:
+            condition = "Spike"
+        elif not_meet_days <= 3:
+            condition = "Recurring High"
+        else:
+            condition = "Persistent High"
+
+        site_rows = condition_source[condition_source[site_col].astype(str) == str(site_name)]
+        enodeb_value = ""
+        if enodeb_col and enodeb_col in site_rows.columns:
+            enodeb_value = next(
+                (str(v).strip() for v in site_rows[enodeb_col].dropna() if str(v).strip()), ""
+            )
+        tower_value = ""
+        if tower_col and tower_col in site_rows.columns:
+            tower_value = next(
+                (str(v).strip() for v in site_rows[tower_col].dropna() if str(v).strip()), ""
+            )
+        if not tower_value:
+            match = re.search(r"(SUM-[^#]*)", enodeb_value, flags=re.IGNORECASE)
+            tower_value = match.group(1) if match else ""
+
+        condition_rows.append({
+            "TowerID": tower_value,
+            "Full eNodeB Name": enodeb_value or str(site_name),
+            "Site Display": str(site_name),
+            "Window Start": window_start.strftime("%Y-%m-%d"),
+            "Window End": latest_day.strftime("%Y-%m-%d"),
+            "Days With Data": int(grp["_Day"].nunique()),
+            "Not Meet Days (7d)": not_meet_days,
+            "Not Meet Days (%)": round(not_meet_days / 7 * 100, 2),
+            "Consecutive Not Meet Days": consecutive,
+            "Max Daily PL (%)": float(grp["Daily_Max_PL_Percent"].max()),
+            "Site Condition": condition,
+        })
+
+    condition_summary = pd.DataFrame(condition_rows)
+    if not condition_summary.empty:
+        condition_order = {
+            "Persistent High": 0, "Recurring High": 1, "Spike": 2, "Normal": 3
+        }
+        condition_summary["_order"] = condition_summary["Site Condition"].map(condition_order)
+        condition_summary = condition_summary.sort_values(
+            ["_order", "Not Meet Days (7d)", "Max Daily PL (%)"],
+            ascending=[True, False, False],
+        ).drop(columns="_order")
+        st.dataframe(condition_summary, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download 7-Day Site Condition CSV",
+            data=condition_summary.to_csv(index=False).encode("utf-8-sig"),
+            file_name="twamp_site_condition_7day.csv",
+            mime="text/csv",
+            key="twamp_7day_condition_download",
+        )
+    else:
+        st.info("Belum ada data untuk klasifikasi kondisi site 7 hari.")
+
     st.subheader("Not Meet Records")
     bad = df[df["_Status"] == "Not Meet"].copy()
     display_cols = [date_col]
