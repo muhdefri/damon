@@ -6567,14 +6567,14 @@ def render_configurable_kpi_analysis():
     with c6:
         payload_display = st.selectbox(
             "Payload Display",
-            ["Line", "Bar"],
+            ["Line", "Stacked"],
             index=0,
             disabled=("Payload" not in selected),
             key="custom_kpi_analysis_payload_display",
             help=(
-                "Choose how Payload is displayed in KPI Analysis. "
-                "Line is recommended for comparing multiple cells; "
-                "Bar is useful for volume-oriented views."
+                "Line shows a separate Payload trend for each selected site. "
+                "Stacked shows each site's Payload as a different colored "
+                "filled area, similar to the reference chart."
             ),
         )
 
@@ -6919,6 +6919,37 @@ def render_configurable_kpi_analysis():
             .agg(**agg_dict)
             .sort_values(["_Chart_Date", "_Analysis_Sector"])
         )
+    elif (
+        not effective_cell_level
+        and "Payload" in selected_columns
+        and analysis_df["_Site_ID_Search"].nunique() > 1
+    ):
+        # Multi-site Payload comparison: preserve one independent series per site.
+        # Bulk mode still forces exact Cell-level grouping above.
+        if analysis_search_mode == "Full eNodeB Name":
+            work["_Analysis_Site"] = (
+                analysis_df["_eNodeB_Search"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .values
+            )
+        else:
+            work["_Analysis_Site"] = (
+                analysis_df["_Site_ID_Search"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .values
+            )
+        custom_df = (
+            work.groupby(
+                ["_Chart_Date", "_Analysis_Site"],
+                as_index=False,
+            )
+            .agg(**agg_dict)
+            .sort_values(["_Chart_Date", "_Analysis_Site"])
+        )
     else:
         custom_df = (
             work.groupby("_Chart_Date", as_index=False)
@@ -7164,7 +7195,7 @@ def render_configurable_kpi_analysis():
                     cell_color = color_map[cell]
 
                     # KPI #1 -> LEFT AXIS
-                    if left_is_payload and payload_display == "Bar":
+                    if left_is_payload and payload_display == "Stacked":
                         fig.add_trace(
                             go.Bar(
                                 x=cell_df["_Chart_Date"],
@@ -7210,7 +7241,7 @@ def render_configurable_kpi_analysis():
                         )
 
                     # KPI #2 -> RIGHT AXIS
-                    if right_is_payload and payload_display == "Bar":
+                    if right_is_payload and payload_display == "Stacked":
                         fig.add_trace(
                             go.Bar(
                                 x=cell_df["_Chart_Date"],
@@ -7379,7 +7410,7 @@ def render_configurable_kpi_analysis():
             left_is_payload = kpi_left.upper() == "PAYLOAD"
             right_is_payload = kpi_right.upper() == "PAYLOAD"
 
-            if left_is_payload and payload_display == "Bar":
+            if left_is_payload and payload_display == "Stacked":
                 fig.add_trace(
                     go.Bar(
                         x=custom_df["_Chart_Date"],
@@ -7409,7 +7440,7 @@ def render_configurable_kpi_analysis():
                     )
                 )
 
-            if right_is_payload and payload_display == "Bar":
+            if right_is_payload and payload_display == "Stacked":
                 fig.add_trace(
                     go.Bar(
                         x=custom_df["_Chart_Date"],
@@ -7627,6 +7658,104 @@ def render_configurable_kpi_analysis():
 
         if (
             len(valid_kpis) == 1
+            and valid_kpis[0].upper() == "PAYLOAD"
+            and not effective_cell_level
+            and not effective_sector_level
+            and "_Analysis_Site" in custom_df.columns
+        ):
+            payload_kpi = valid_kpis[0]
+            site_names = sorted(
+                value for value in
+                custom_df["_Analysis_Site"].dropna().astype(str).unique()
+                if value
+            )
+            palette = (
+                px.colors.qualitative.Plotly
+                + px.colors.qualitative.D3
+                + px.colors.qualitative.Safe
+                + px.colors.qualitative.Dark24
+            )
+            site_color_map = {
+                site: palette[i % len(palette)]
+                for i, site in enumerate(site_names)
+            }
+            for site in site_names:
+                site_series = custom_df[
+                    custom_df["_Analysis_Site"].astype(str) == site
+                ].sort_values("_Chart_Date")
+                y_values = pd.to_numeric(
+                    site_series[payload_kpi], errors="coerce"
+                )
+                if payload_display == "Stacked":
+                    fig.add_trace(
+                        go.Scatter(
+                            x=site_series["_Chart_Date"],
+                            y=y_values,
+                            name=site,
+                            legendgroup=site,
+                            mode="lines",
+                            line=dict(color=site_color_map[site], width=1.5),
+                            stackgroup="payload",
+                            groupnorm=None,
+                            hovertemplate=(
+                                "Date: %{x}<br>Site: " + site
+                                + "<br>Payload: %{y:.2f} GB<extra></extra>"
+                            ),
+                        )
+                    )
+                else:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=site_series["_Chart_Date"],
+                            y=y_values,
+                            name=site,
+                            legendgroup=site,
+                            mode="lines+markers",
+                            line=dict(color=site_color_map[site], width=2.5),
+                            marker=dict(color=site_color_map[site], size=5),
+                            connectgaps=False,
+                            hovertemplate=(
+                                "Date: %{x}<br>Site: " + site
+                                + "<br>Payload: %{y:.2f} GB<extra></extra>"
+                            ),
+                        )
+                    )
+
+            fig.update_layout(
+                title=title,
+                height=480,
+                template="plotly_white",
+                margin=dict(l=55, r=55, t=55, b=105),
+                hovermode="x unified",
+                xaxis=dict(
+                    title="Date / Time",
+                    tickformat=tickformat,
+                    hoverformat=hoverformat,
+                    dtick=dtick,
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                ),
+                yaxis=dict(
+                    title="Payload (GB)",
+                    rangemode="tozero",
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.22,
+                    xanchor="center",
+                    x=0.5,
+                    title="Site",
+                ),
+            )
+            return fig
+
+        if (
+            len(valid_kpis) == 1
             and effective_cell_level
             and "_Analysis_Cell" in custom_df.columns
         ):
@@ -7690,7 +7819,7 @@ def render_configurable_kpi_analysis():
                 )
                 cell_color = color_map[cell]
 
-                if is_payload and payload_display == "Bar":
+                if is_payload and payload_display == "Stacked":
                     fig.add_trace(
                         go.Bar(
                             x=cell_df["_Chart_Date"],
@@ -7812,7 +7941,7 @@ def render_configurable_kpi_analysis():
         # FALLBACK FOR 1 OR 3+ KPIs
         # ------------------------------------------------------------
         # Keep the existing behavior for combinations other than exactly
-        # two KPIs. Payload still follows the Bar/Line display selector.
+        # two KPIs. Payload uses the Line/Stacked display selector.
         non_payload_kpis = [
             k for k in valid_kpis
             if k.upper() != "PAYLOAD"
@@ -7832,7 +7961,7 @@ def render_configurable_kpi_analysis():
                 errors="coerce",
             )
 
-            if payload_display == "Bar":
+            if payload_display == "Stacked":
                 fig.add_trace(
                     go.Bar(
                         x=custom_df["_Chart_Date"],
