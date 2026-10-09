@@ -465,7 +465,54 @@ def render_twamp_dashboard():
         ).drop(columns="_order").reset_index(drop=True)
         condition_summary.insert(0, "No", range(1, len(condition_summary) + 1))
 
-        st.dataframe(condition_summary, use_container_width=True, hide_index=True)
+        # Excel-like freeze panes for the TWAMP Site Condition summary:
+        # keep the first six identity/period columns fixed while scrolling horizontally.
+        # Keep the existing Streamlit dataframe available as a fallback.
+        try:
+            import streamlit.components.v1 as components
+
+            freeze_widths = [52, 110, 350, 110, 100, 100]
+            left_offsets = []
+            running_width = 0
+            for width in freeze_widths:
+                left_offsets.append(running_width)
+                running_width += width
+
+            table_html = condition_summary.to_html(
+                index=False,
+                escape=True,
+                border=0,
+                classes="twamp-freeze-table",
+            )
+            sticky_css = """
+            <style>
+              html, body { margin: 0; padding: 0; font-family: sans-serif; }
+              .twamp-scroll { width: 100%; height: 560px; overflow: auto; border: 1px solid #e5e7eb; }
+              table.twamp-freeze-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12px; color: #374151; }
+              .twamp-freeze-table th, .twamp-freeze-table td {
+                box-sizing: border-box; padding: 7px 8px; white-space: nowrap;
+                border-right: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb;
+                background: white; text-align: left;
+              }
+              .twamp-freeze-table thead th { position: sticky; top: 0; z-index: 30; background: #f3f4f6; font-weight: 600; }
+              .twamp-freeze-table th:nth-child(1), .twamp-freeze-table td:nth-child(1) { position: sticky; left: 0px; min-width: 52px; width: 52px; z-index: 20; }
+              .twamp-freeze-table th:nth-child(2), .twamp-freeze-table td:nth-child(2) { position: sticky; left: 52px; min-width: 110px; width: 110px; z-index: 20; }
+              .twamp-freeze-table th:nth-child(3), .twamp-freeze-table td:nth-child(3) { position: sticky; left: 162px; min-width: 350px; width: 350px; max-width: 350px; overflow: hidden; text-overflow: ellipsis; z-index: 20; }
+              .twamp-freeze-table th:nth-child(4), .twamp-freeze-table td:nth-child(4) { position: sticky; left: 512px; min-width: 110px; width: 110px; z-index: 20; }
+              .twamp-freeze-table th:nth-child(5), .twamp-freeze-table td:nth-child(5) { position: sticky; left: 622px; min-width: 100px; width: 100px; z-index: 20; }
+              .twamp-freeze-table th:nth-child(6), .twamp-freeze-table td:nth-child(6) { position: sticky; left: 722px; min-width: 100px; width: 100px; z-index: 20; }
+              .twamp-freeze-table thead th:nth-child(-n+6) { z-index: 40; background: #eef2f7; }
+              .twamp-freeze-table tbody tr:hover td { background: #f8fafc; }
+              .twamp-freeze-table tbody tr:hover td:nth-child(-n+6) { background: #f8fafc; }
+            </style>
+            """
+            components.html(
+                sticky_css + '<div class="twamp-scroll">' + table_html + '</div>',
+                height=580,
+                scrolling=False,
+            )
+        except Exception:
+            st.dataframe(condition_summary, use_container_width=True, hide_index=True)
 
         st.download_button(
             "Download Site Condition Summary CSV",
