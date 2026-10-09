@@ -57,26 +57,53 @@ def render_twamp_dashboard():
         st.error(f"Gagal membaca file TWAMP: {exc}")
         return
 
-    raw.columns = [str(c).strip() for c in raw.columns]
-    packet_loss_col = "VS.BSTWAMP.RoundTrip.DropMeans(%)"
-    if packet_loss_col not in raw.columns:
-        # Accept a header with the same KPI name but without the unit suffix.
-        candidates = [
-            c for c in raw.columns
-            if str(c).strip().lower() in {
-                "vs.bstwamp.roundtrip.dropmeans",
-                "vs.bstwamp.roundtrip.dropmeans(%)",
-            }
-        ]
-        if candidates:
-            packet_loss_col = candidates[0]
-        else:
-            st.error(
-                "Kolom Packet Loss tidak ditemukan. Kolom yang dicari: "
-                "`VS.BSTWAMP.RoundTrip.DropMeans(%)`."
-            )
-            st.write("Kolom tersedia:", list(raw.columns))
-            return
+    raw.columns = [str(c).strip().lstrip("\\ufeff") for c in raw.columns]
+    packet_loss_col = next(
+        (c for c in raw.columns
+         if re.sub(r"\\s+", "", str(c)).lower()
+         in {"vs.bstwamp.roundtrip.dropmeans(%)", "vs.bstwamp.roundtrip.dropmeans"}),
+        None,
+    )
+
+    # Robust fallback for CSV exports with delimiter/encoding/header quirks.
+    # The standard comma-separated read is attempted first; only retry if the
+    # expected KPI header was not found.
+    if packet_loss_col is None:
+        filename = twamp_file.name.lower().strip()
+        compression = "gzip" if filename.endswith(".csv.gz") else None
+        for encoding in ("utf-8-sig", "latin1"):
+            for sep in (None, ";", "\\t", ","):
+                try:
+                    twamp_file.seek(0)
+                    candidate_df = pd.read_csv(
+                        twamp_file, compression=compression, low_memory=False,
+                        encoding=encoding, sep=sep, engine="python"
+                    )
+                    candidate_df.columns = [
+                        str(c).strip().lstrip("\\ufeff") for c in candidate_df.columns
+                    ]
+                    candidate_col = next(
+                        (c for c in candidate_df.columns
+                         if re.sub(r"\\s+", "", str(c)).lower()
+                         in {"vs.bstwamp.roundtrip.dropmeans(%)", "vs.bstwamp.roundtrip.dropmeans"}),
+                        None,
+                    )
+                    if candidate_col is not None:
+                        raw, packet_loss_col = candidate_df, candidate_col
+                        break
+                except Exception:
+                    continue
+            if packet_loss_col is not None:
+                break
+
+    if packet_loss_col is None:
+        st.error(
+            "Kolom Packet Loss tidak ditemukan. Pastikan file yang di-upload adalah "
+            "CSV TWAMP dengan header `VS.BSTWAMP.RoundTrip.DropMeans(%)` di kolom Z."
+        )
+        st.write("Jumlah kolom terbaca:", len(raw.columns))
+        st.write("Contoh header terbaca:", [str(c) for c in raw.columns[:12]])
+        return
 
     date_col = next((c for c in raw.columns if c.strip().lower() in {"date", "datetime", "timestamp", "time"}), None)
     site_col = next((c for c in raw.columns if c.strip().lower() in {"enodeb name", "site name", "site", "enodeb"}), None)
