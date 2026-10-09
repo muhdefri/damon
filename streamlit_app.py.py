@@ -167,25 +167,46 @@ def render_twamp_dashboard():
     df["_Status"] = df["_PacketLoss"].le(target).map({True: "Meet", False: "Not Meet"})
 
     # Filters are intentionally scoped to the TWAMP module only.
+    # Choose explicit Start Date / End Date; all summaries and records below
+    # use the same selected interval.
     with st.sidebar:
         st.subheader("TWAMP Filters")
         if site_col:
             site_values = sorted(df[site_col].dropna().astype(str).unique().tolist())
-            selected_sites = st.multiselect("Site / eNodeB", site_values, default=site_values)
+            selected_sites = st.multiselect(
+                "Site / eNodeB", site_values, default=site_values,
+                key="twamp_selected_sites",
+            )
             if selected_sites:
                 df = df[df[site_col].astype(str).isin(selected_sites)]
-        min_date = df["_Date"].min().date()
-        max_date = df["_Date"].max().date()
-        date_options = sorted(df["_Date"].dt.date.unique())
-        date_options = [pd.Timestamp(d).date() for d in date_options]
-        if len(date_options) > 1:
-            date_range = st.select_slider(
-                "Date range",
-                options=date_options,
-                value=(min_date, max_date),
+
+        available_dates = sorted(pd.Timestamp(d).date() for d in df["_Date"].dt.date.unique())
+        min_date = available_dates[0]
+        max_date = available_dates[-1]
+        start_col, end_col = st.columns(2)
+        with start_col:
+            start_date = st.selectbox(
+                "Start Date",
+                options=available_dates,
+                index=0,
                 format_func=lambda d: d.strftime("%d %b %Y"),
+                key="twamp_start_date",
             )
-            df = df[df["_Date"].dt.date.between(date_range[0], date_range[1])]
+        valid_end_dates = [d for d in available_dates if d >= start_date]
+        with end_col:
+            default_end_index = len(valid_end_dates) - 1
+            end_date = st.selectbox(
+                "End Date",
+                options=valid_end_dates,
+                index=default_end_index,
+                format_func=lambda d: d.strftime("%d %b %Y"),
+                key="twamp_end_date",
+            )
+        if start_date > end_date:
+            st.warning("Start Date tidak boleh melewati End Date.")
+            return
+        st.caption(f"Periode aktif: {start_date:%d %b %Y} – {end_date:%d %b %Y}")
+        df = df[df["_Date"].dt.date.between(start_date, end_date)]
 
     if df.empty:
         st.warning("Tidak ada data setelah filter dipilih.")
@@ -349,7 +370,10 @@ def render_twamp_dashboard():
     )
     condition_source = df.copy()
     condition_source["_Day"] = condition_source["_Date"].dt.normalize()
-    latest_day = condition_source["_Day"].max()
+    # Rolling 7-day window ends at the manually selected End Date.
+    # The selected interval still controls summary/detail tables; this
+    # condition view uses the final 7 calendar days ending at End Date.
+    latest_day = pd.Timestamp(end_date)
     window_start = latest_day - pd.Timedelta(days=6)
     condition_source = condition_source[
         condition_source["_Day"].between(window_start, latest_day)
@@ -368,8 +392,9 @@ def render_twamp_dashboard():
         bad_days = set(grp.loc[grp["_Daily_Not_Meet"], "_Day"].tolist())
         not_meet_days = len(bad_days)
         consecutive = 0
+        observed_days = set(grp["_Day"].tolist())
         cursor = latest_day
-        while cursor in bad_days:
+        while cursor in observed_days and cursor in bad_days:
             consecutive += 1
             cursor -= pd.Timedelta(days=1)
 
@@ -404,6 +429,7 @@ def render_twamp_dashboard():
             "Window Start": window_start.strftime("%Y-%m-%d"),
             "Window End": latest_day.strftime("%Y-%m-%d"),
             "Days With Data": int(grp["_Day"].nunique()),
+            "Missing Days (7d)": int(7 - grp["_Day"].nunique()),
             "Not Meet Days (7d)": not_meet_days,
             "Not Meet Days (%)": round(not_meet_days / 7 * 100, 2),
             "Consecutive Not Meet Days": consecutive,
