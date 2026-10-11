@@ -19,7 +19,7 @@ import base64
 # PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="RAN KPI Dashboard",
+    page_title="RAN KPI Dashboard By Muhdefri",
     page_icon="📡",
     layout="wide",
 )
