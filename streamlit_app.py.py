@@ -139,14 +139,30 @@ def render_twamp_dashboard():
     if enodeb_col is None:
         enodeb_col = next(
             (c for c in raw.columns
-             if "enodeb" in _norm_col(c) and "name" in _norm_col(c)),
+             if (("enodeb" in _norm_col(c) or "nodeb" in _norm_col(c)) and "name" in _norm_col(c))),
             None,
         )
-    # In the user's TWAMP export, column B is explicitly "eNodeB Name".
-    if enodeb_col is None and len(raw.columns) > 1:
-        second_col = raw.columns[1]
-        if raw[second_col].astype(str).str.contains(r"#|LTE|NR", case=False, regex=True).mean() > 0.5:
-            enodeb_col = second_col
+    # Hybrid fallback for exports where the identifier header differs or
+    # moves position between Daily and Hourly files. Prefer a column whose
+    # values look like full eNodeB identifiers; never assume a fixed column B/C.
+    if enodeb_col is None:
+        identifier_candidates = []
+        for candidate in raw.columns:
+            if candidate in {date_col, time_col, packet_loss_col, tower_col}:
+                continue
+            values = raw[candidate].dropna().astype(str).str.strip()
+            if values.empty:
+                continue
+            identifier_ratio = values.str.contains(
+                r"#|LTE|NR|SUM-", case=False, regex=True
+            ).mean()
+            header_norm = _norm_col(candidate)
+            header_bonus = 0.35 if ("nodeb" in header_norm and "name" in header_norm) else 0.0
+            identifier_candidates.append((identifier_ratio + header_bonus, candidate))
+        if identifier_candidates:
+            best_score, best_candidate = max(identifier_candidates, key=lambda item: item[0])
+            if best_score >= 0.35:
+                enodeb_col = best_candidate
     site_col = tower_col or enodeb_col or next(
         (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
     )
