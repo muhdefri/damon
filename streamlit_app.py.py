@@ -30,7 +30,7 @@ _dashboard_mode = st.sidebar.selectbox(
     ["RAN KPI Dashboard", "TWAMP Packet Loss"],
     key="dashboard_mode_selector",
 )
-if _dashboard_mode == "RAN KPI Dashboard By Muhdefri":
+if _dashboard_mode == "RAN KPI Dashboard":
     # Header-only branding: keep the existing dashboard logic unchanged.
     _ran_title_col, _ran_logo_col = st.columns([0.78, 0.22], vertical_alignment="center")
     with _ran_title_col:
