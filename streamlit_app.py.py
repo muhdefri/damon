@@ -12,6 +12,7 @@ import re
 import io
 import math
 import unicodedata
+import hashlib
 
 # ============================================================
 # PAGE CONFIG
@@ -48,6 +49,8 @@ def render_twamp_dashboard():
     if twamp_file is None:
         st.info("Upload file TWAMP CSV / CSV.GZ dari sidebar. Dashboard KPI RAN tetap tersedia melalui pilihan Dashboard.")
         return
+
+    twamp_widget_suffix = hashlib.md5(twamp_file.getvalue()).hexdigest()[:10]
 
     try:
         filename = twamp_file.name.lower().strip()
@@ -197,19 +200,40 @@ def render_twamp_dashboard():
             "Data Resolution",
             ["Auto Detect", "Daily", "Hourly"],
             index=0,
-            key="twamp_data_resolution",
+            key=f"twamp_data_resolution_{twamp_widget_suffix}",
             help="Auto Detect mengikuti timestamp pada CSV. Hourly mempertahankan waktu pengukuran; Daily merangkum nilai maksimum per site per hari.",
         )
-        if site_col:
-            site_values = sorted(df[site_col].dropna().astype(str).unique().tolist())
+        if site_col and site_col in df.columns:
+            site_values = sorted(
+                v for v in df[site_col].dropna().astype(str).str.strip().unique().tolist()
+                if v and v.lower() not in {"nan", "none"}
+            )
             selected_sites = st.multiselect(
-                "Site / eNodeB", site_values, default=site_values,
-                key="twamp_selected_sites",
+                "Site / eNodeB",
+                options=site_values,
+                default=site_values,
+                key=f"twamp_selected_sites_{twamp_widget_suffix}",
+                help="Pilih satu atau beberapa site/eNodeB. Daftar mengikuti file TWAMP yang sedang di-upload.",
             )
             if selected_sites:
-                df = df[df[site_col].astype(str).isin(selected_sites)]
+                df = df[df[site_col].astype(str).str.strip().isin(selected_sites)]
+            elif site_values:
+                st.warning("Belum ada Site / eNodeB yang dipilih.")
+                return
+        else:
+            st.warning(
+                "Kolom Site / eNodeB tidak terdeteksi pada CSV. "
+                "Header yang terbaca: " + ", ".join(map(str, raw.columns[:12]))
+            )
+
+        if df.empty:
+            st.warning("Tidak ada record valid setelah filter Site / eNodeB diterapkan.")
+            return
 
         available_dates = sorted(pd.Timestamp(d).date() for d in df["_Date"].dt.date.unique())
+        if not available_dates:
+            st.warning("Tidak ada tanggal valid pada file TWAMP ini.")
+            return
         min_date = available_dates[0]
         max_date = available_dates[-1]
         start_col, end_col = st.columns(2)
@@ -219,7 +243,7 @@ def render_twamp_dashboard():
                 options=available_dates,
                 index=0,
                 format_func=lambda d: d.strftime("%d %b %Y"),
-                key="twamp_start_date",
+                key=f"twamp_start_date_{twamp_widget_suffix}",
             )
         valid_end_dates = [d for d in available_dates if d >= start_date]
         with end_col:
@@ -229,7 +253,7 @@ def render_twamp_dashboard():
                 options=valid_end_dates,
                 index=default_end_index,
                 format_func=lambda d: d.strftime("%d %b %Y"),
-                key="twamp_end_date",
+                key=f"twamp_end_date_{twamp_widget_suffix}",
             )
         if start_date > end_date:
             st.warning("Start Date tidak boleh melewati End Date.")
@@ -407,7 +431,7 @@ def render_twamp_dashboard():
         "Filter chart by Site Condition",
         condition_options,
         index=0,
-        key="twamp_chart_condition_filter",
+        key=f"twamp_chart_condition_filter_{twamp_widget_suffix}",
     )
 
     if selected_condition != "All":
