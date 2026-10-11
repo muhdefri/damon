@@ -132,37 +132,44 @@ def render_twamp_dashboard():
         "towerid", "tower", "siteid", "sitecode"
     }), None)
     enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
-        "fullenodebname", "enodebname", "fullenodeb", "enodeb"
+        "fullenodebname", "enodebname", "fullenodeb", "enodeb",
+        "nodebname", "fullnodebname", "nodeb"
     }), None)
     # Robust fallback for exports where the eNodeB header contains extra text
     # or has been altered by spreadsheet/CSV tools.
     if enodeb_col is None:
         enodeb_col = next(
             (c for c in raw.columns
-             if (("enodeb" in _norm_col(c) or "nodeb" in _norm_col(c)) and "name" in _norm_col(c))),
+             if ("enodeb" in _norm_col(c) or "nodeb" in _norm_col(c))
+             and "name" in _norm_col(c)),
             None,
         )
-    # Hybrid fallback for exports where the identifier header differs or
-    # moves position between Daily and Hourly files. Prefer a column whose
-    # values look like full eNodeB identifiers; never assume a fixed column B/C.
+
+    # Hybrid fallback for vendor exports with a missing/altered identifier header:
+    # Daily exports commonly put eNodeB Name in column B; hourly exports add
+    # Time and move eNodeB Name to column C. Prefer data-shape detection instead
+    # of always assuming a fixed column position.
     if enodeb_col is None:
-        identifier_candidates = []
-        for candidate in raw.columns:
-            if candidate in {date_col, time_col, packet_loss_col, tower_col}:
+        likely_index = 2 if time_col is not None and len(raw.columns) > 2 else 1
+        candidate_order = [likely_index] + [i for i in (1, 2) if i != likely_index]
+        for candidate_index in candidate_order:
+            if candidate_index >= len(raw.columns):
                 continue
-            values = raw[candidate].dropna().astype(str).str.strip()
+            candidate_name = raw.columns[candidate_index]
+            values = raw[candidate_name].dropna().astype(str).str.strip()
             if values.empty:
                 continue
-            identifier_ratio = values.str.contains(
-                r"#|LTE|NR|SUM-", case=False, regex=True
+            # Site/eNodeB identifiers often contain a SUM site token or LTE/NR
+            # cell naming convention; avoid selecting Date, Time, or KPI columns.
+            id_pattern_share = values.str.contains(
+                r"SUM-|#|LTE|NR", case=False, regex=True
             ).mean()
-            header_norm = _norm_col(candidate)
-            header_bonus = 0.35 if ("nodeb" in header_norm and "name" in header_norm) else 0.0
-            identifier_candidates.append((identifier_ratio + header_bonus, candidate))
-        if identifier_candidates:
-            best_score, best_candidate = max(identifier_candidates, key=lambda item: item[0])
-            if best_score >= 0.35:
-                enodeb_col = best_candidate
+            header_norm = _norm_col(candidate_name)
+            if id_pattern_share >= 0.25 and not any(
+                token in header_norm for token in ("date", "time", "dropmeans", "jitter")
+            ):
+                enodeb_col = candidate_name
+                break
     site_col = tower_col or enodeb_col or next(
         (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
     )
@@ -490,6 +497,26 @@ def render_twamp_dashboard():
             title=dict(text="Site / eNodeB"),
         ),
     )
+    # Auto-format the x-axis: hourly exports show clock time so the hour of
+    # each Packet Loss spike is immediately visible; daily exports remain date-only.
+    if active_resolution == "Hourly":
+        period_hours = max(
+            (chart_df["_Date"].max() - chart_df["_Date"].min()).total_seconds() / 3600,
+            1,
+        ) if not chart_df.empty else 24
+        tick_hours = 1 if period_hours <= 24 else 3 if period_hours <= 72 else 6 if period_hours <= 168 else 12
+        fig.update_xaxes(
+            tickformat="%d %b<br>%H:%M",
+            dtick=tick_hours * 60 * 60 * 1000,
+            tickangle=0,
+            hoverformat="%d %b %Y %H:%M",
+        )
+    else:
+        fig.update_xaxes(
+            tickformat="%d %b",
+            hoverformat="%d %b %Y",
+        )
+
     if chart_df.empty:
         st.info(f"Tidak ada site dengan kondisi '{selected_condition}' pada periode terpilih.")
     else:
