@@ -6024,6 +6024,17 @@ def render_configurable_kpi_analysis():
                             if field.strip()
                         ]
 
+                    # Also accept rows typed/pasted with single spaces
+                    # between the three identifiers. These identifiers
+                    # (FreqBand, Cell Name, Site ID/eNodeB) do not contain
+                    # spaces in the supported bulk-list format.
+                    if len(fields) < 3:
+                        fields = [
+                            field.strip()
+                            for field in re.split(r"\s+", line)
+                            if field.strip()
+                        ]
+
                     if len(fields) < 3:
                         continue
 
