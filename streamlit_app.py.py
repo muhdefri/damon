@@ -7101,13 +7101,25 @@ def render_configurable_kpi_analysis():
             .apply(normalize_cell_name)
             .values
         )
+        # Keep the Site ID attached to each cell so even a single-cell
+        # analysis identifies its site in the legend below the chart.
+        work["_Analysis_Site"] = (
+            analysis_df["_Site_ID_Search"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .values
+        )
         custom_df = (
             work.groupby(
-                ["_Chart_Date", "_Analysis_Cell"],
+                ["_Chart_Date", "_Analysis_Cell", "_Analysis_Site"],
                 as_index=False,
+                dropna=False,
             )
             .agg(**agg_dict)
-            .sort_values(["_Chart_Date", "_Analysis_Cell"])
+            .sort_values(
+                ["_Chart_Date", "_Analysis_Site", "_Analysis_Cell"]
+            )
         )
     elif effective_sector_level:
         # Sector is mapped upstream from LocalCell ID / existing dashboard logic.
@@ -7305,6 +7317,21 @@ def render_configurable_kpi_analysis():
         """
         fig = go.Figure()
 
+        def _site_label_for_cell(cell_frame, cell_name):
+            """Return the Site ID for a cell trace; retain a clear fallback."""
+            if "_Analysis_Site" not in cell_frame.columns:
+                return "Site ID unavailable"
+            site_values = (
+                cell_frame["_Analysis_Site"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+            )
+            site_values = [value for value in site_values.unique() if value]
+            if site_values:
+                return " / ".join(sorted(site_values))
+            return "Site ID unavailable"
+
         valid_kpis = [
             k for k in kpis
             if k in custom_df.columns
@@ -7411,7 +7438,7 @@ def render_configurable_kpi_analysis():
                                     cell_df[kpi_left],
                                     errors="coerce",
                                 ),
-                                name=f"{cell} — {kpi_left}",
+                                name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {kpi_left}",
                                 legendgroup=cell,
                                 marker_color=cell_color,
                                 marker_line_width=0,
@@ -7457,7 +7484,7 @@ def render_configurable_kpi_analysis():
                                     cell_df[kpi_right],
                                     errors="coerce",
                                 ),
-                                name=f"{cell} — {kpi_right}",
+                                name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {kpi_right}",
                                 legendgroup=cell,
                                 marker_color=cell_color,
                                 marker_line_width=0,
@@ -7574,7 +7601,9 @@ def render_configurable_kpi_analysis():
                         showgrid=False,
                         automargin=True,
                     ),
+                    showlegend=True,
                     legend=dict(
+                        title="Site ID — Cell Name — KPI",
                         orientation="h",
                         yanchor="top",
                         y=-0.22,
@@ -8032,7 +8061,7 @@ def render_configurable_kpi_analysis():
                         go.Bar(
                             x=cell_df["_Chart_Date"],
                             y=cell_values,
-                            name=f"{cell} — {single_kpi}",
+                            name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {single_kpi}",
                             legendgroup=cell,
                             marker_color=cell_color,
                             marker_line_width=0,
@@ -8045,7 +8074,7 @@ def render_configurable_kpi_analysis():
                         go.Scatter(
                             x=cell_df["_Chart_Date"],
                             y=cell_values,
-                            name=f"{cell} — {single_kpi}",
+                            name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {single_kpi}",
                             legendgroup=cell,
                             mode="lines+markers",
                             line=dict(
@@ -8133,7 +8162,9 @@ def render_configurable_kpi_analysis():
                     automargin=True,
                     side="left",
                 ),
+                showlegend=True,
                 legend=dict(
+                    title="Site ID — Cell Name — KPI",
                     orientation="h",
                     yanchor="top",
                     y=-0.22,
@@ -8293,8 +8324,9 @@ def render_configurable_kpi_analysis():
             title=title,
             height=430,
             template="plotly_white",
+            # Reduce internal left/right padding so adjacent charts sit closer together.
             margin=dict(
-                l=48, r=58, t=55, b=90
+                l=24, r=24, t=55, b=90
             ),
             hovermode="x unified",
             barmode="overlay",
@@ -8355,7 +8387,8 @@ def render_configurable_kpi_analysis():
         _download_figures.append(fig_primary)
         _download_figures.append(fig_related)
 
-        left, right = st.columns(2, gap="small")
+        # Keep the two KPI Analysis charts tightly adjacent, as previously requested.
+        left, right = st.columns(2, gap=None)
         with left:
             st.plotly_chart(
                 fig_primary,
