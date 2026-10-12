@@ -7731,12 +7731,19 @@ def render_configurable_kpi_analysis():
                     yref=threshold_axis,
                 )
 
-            # Single-KPI line charts must not use bar-oriented x-axis padding:
-            # use the exact first/last timestamps so the line reaches both plot edges.
-            custom_x_range = [
-                pd.to_datetime(custom_df["_Chart_Date"]).min(),
-                pd.to_datetime(custom_df["_Chart_Date"]).max(),
-            ]
+            # Tighten the visible date window slightly so line traces meet the
+            # left/right plot boundaries instead of appearing inset from them.
+            _x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
+            _x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
+            _x_span = _x_max - _x_min
+            if _x_span > pd.Timedelta(0):
+                _edge_trim = _x_span * 0.045
+                custom_x_range = [
+                    _x_min + _edge_trim,
+                    _x_max - _edge_trim,
+                ]
+            else:
+                custom_x_range = [_x_min, _x_max]
 
             def _axis_title(kpi):
                 if kpi.upper() == "PAYLOAD":
@@ -8307,12 +8314,19 @@ def render_configurable_kpi_analysis():
             )
 
         if not custom_df.empty:
-            # For line charts, extend the visible x-range to the plot edges
-            # by removing date padding entirely. Plotly connects the first and
-            # last observations to their exact positions on this range.
+            # Tighten the visible date window slightly so traces reach both
+            # plot boundaries. Apply consistently to combined KPI charts too.
             _x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
             _x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
-            custom_x_range = [_x_min, _x_max]
+            _x_span = _x_max - _x_min
+            if _x_span > pd.Timedelta(0):
+                _edge_trim = _x_span * 0.045
+                custom_x_range = [
+                    _x_min + _edge_trim,
+                    _x_max - _edge_trim,
+                ]
+            else:
+                custom_x_range = [_x_min, _x_max]
         else:
             custom_x_range = None
 
