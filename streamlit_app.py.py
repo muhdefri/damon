@@ -852,7 +852,7 @@ KPI_CONFIG = {
         "category": "Accessibility",
         "unit": "%",
     },
-    "E-RAB Setup SR (ALL)_NPM": {
+    "ERAB Setup Success Rate": {
         "column": "ERAB Setup Success Rate (ALL)_NPM",
         "category": "Accessibility",
         "unit": "%",
@@ -871,6 +871,11 @@ KPI_CONFIG = {
         "column": "ISL_BZG_CBRA Success Rate(%)",
         "category": "Accessibility",
         "unit": "%",
+    },
+    "QPSK Distribution": {
+        "column": "QPSK Distribution",
+        "category": "Radio/Coverage",
+        "unit": "",
     },
     "CBRA Counter": {
         "column": "CBRA",
@@ -1038,6 +1043,11 @@ KPI_CONFIG = {
         "category": "Traffic",
         "unit": "GB",
         "chart": "stacked",
+    },
+    "Sum_L.Traffic.User.Avg": {
+        "column": "Sum_L.Traffic.User.Avg",
+        "category": "Traffic",
+        "unit": "",
     },
     "DL Payload": {
         "column": "Payload_DL_GB(%)",
@@ -2561,6 +2571,14 @@ QUICK_KPI = [
     "HOSR Intra",
     "HOSR Inter",
 
+    # Additional requested Quick KPI items
+    "ERAB Setup Success Rate",
+    "S1 Setup SR",
+    "RACH Success Rate",
+    "CBRA Success Rate",
+    "QPSK Distribution",
+    "Sum_L.Traffic.User.Avg",
+
     # Remaining KPI 1 items
     "SSSR",
     "RRC Setup SR",
@@ -2619,15 +2637,11 @@ with layout_col:
             "Horizontal",
             "Vertical",
             "2 Charts",
-            "KPI Analysis",
-            "KPI Status Transition",
         ],
         index=0,
         horizontal=True,
         help=(
-            "Choose one independent dashboard layout. "
-            "The existing four layouts remain unchanged; "
-            "KPI Status Transition is an additional comparison layout."
+            "Choose one of the three chart layouts: Horizontal, Vertical, or 2 Charts."
         ),
         key="chart_layout_selector",
     )
