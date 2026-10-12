@@ -8324,9 +8324,9 @@ def render_configurable_kpi_analysis():
             title=title,
             height=430,
             template="plotly_white",
-            # Minimize internal horizontal padding for a tighter side-by-side layout.
+            # Use minimal Plotly side margins; chart columns are also gap-free.
             margin=dict(
-                l=8, r=8, t=55, b=90
+                l=0, r=0, t=55, b=90
             ),
             hovermode="x unified",
             barmode="overlay",
@@ -8388,7 +8388,7 @@ def render_configurable_kpi_analysis():
         _download_figures.append(fig_related)
 
         # Keep the two KPI Analysis charts tightly adjacent, as previously requested.
-        left, right = st.columns([1, 1], gap="small")
+        left, right = st.columns([1, 1], gap=None)
         with left:
             st.plotly_chart(
                 fig_primary,
