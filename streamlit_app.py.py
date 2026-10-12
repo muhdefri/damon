@@ -8060,13 +8060,25 @@ def render_configurable_kpi_analysis():
                     cell_df[single_kpi],
                     errors="coerce",
                 )
+                # Extend each cell trace to the global plot boundaries using
+                # its nearest available value, so the visible lines meet both
+                # edges even when that cell's first/last sample is later/earlier.
+                _trace_dates = pd.to_datetime(cell_df["_Chart_Date"]).tolist()
+                _trace_values = cell_values.tolist()
+                if _trace_dates and _global_x_min is not pd.NaT:
+                    if _trace_dates[0] > _global_x_min:
+                        _trace_dates.insert(0, _global_x_min)
+                        _trace_values.insert(0, _trace_values[0])
+                    if _trace_dates[-1] < _global_x_max:
+                        _trace_dates.append(_global_x_max)
+                        _trace_values.append(_trace_values[-1])
                 cell_color = color_map[cell]
 
                 if is_payload and payload_display == "Stacked":
                     fig.add_trace(
                         go.Bar(
-                            x=cell_df["_Chart_Date"],
-                            y=cell_values,
+                            x=_trace_dates,
+                            y=_trace_values,
                             name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {single_kpi}",
                             legendgroup=cell,
                             marker_color=cell_color,
@@ -8078,8 +8090,8 @@ def render_configurable_kpi_analysis():
                 else:
                     fig.add_trace(
                         go.Scatter(
-                            x=cell_df["_Chart_Date"],
-                            y=cell_values,
+                            x=_trace_dates,
+                            y=_trace_values,
                             name=f"{_site_label_for_cell(cell_df, cell)} — {cell} — {single_kpi}",
                             legendgroup=cell,
                             mode="lines+markers",
@@ -8117,13 +8129,10 @@ def render_configurable_kpi_analysis():
                     yref="y",
                 )
 
-            custom_x_pad = _bar_xaxis_padding(
-                custom_df["_Chart_Date"]
-            )
-            custom_x_range = [
-                custom_df["_Chart_Date"].min() - custom_x_pad,
-                custom_df["_Chart_Date"].max() + custom_x_pad,
-            ]
+            # Use the full data interval as the plot interval (no bar padding).
+            _global_x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
+            _global_x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
+            custom_x_range = [_global_x_min, _global_x_max]
 
             def _single_axis_title(kpi):
                 if kpi.upper() == "PAYLOAD":
@@ -8314,19 +8323,9 @@ def render_configurable_kpi_analysis():
             )
 
         if not custom_df.empty:
-            # Tighten the visible date window slightly so traces reach both
-            # plot boundaries. Apply consistently to combined KPI charts too.
             _x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
             _x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
-            _x_span = _x_max - _x_min
-            if _x_span > pd.Timedelta(0):
-                _edge_trim = _x_span * 0.045
-                custom_x_range = [
-                    _x_min + _edge_trim,
-                    _x_max - _edge_trim,
-                ]
-            else:
-                custom_x_range = [_x_min, _x_max]
+            custom_x_range = [_x_min, _x_max]
         else:
             custom_x_range = None
 
