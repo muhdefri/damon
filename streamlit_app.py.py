@@ -9038,6 +9038,143 @@ def render_configurable_kpi_analysis():
 
                     compare_summary["Threshold"] = float(threshold)
 
+                    # TA remark is intentionally limited to KPI-vs-TA
+                    # comparison summaries. It does not alter regular KPI
+                    # Meet/Not Meet evaluation or other dashboard features.
+                    ta_counter_cols = {}
+                    for ta_index in range(12):
+                        expected_ta_name = f"L.RA.TA.UE.Index{ta_index}"
+                        matched_ta_col = next(
+                            (
+                                col for col in analysis_df.columns
+                                if str(col).strip() == expected_ta_name
+                                or str(col).strip().startswith(expected_ta_name + " ")
+                                or str(col).strip().startswith(expected_ta_name + "(")
+                            ),
+                            None,
+                        )
+                        if matched_ta_col is not None:
+                            ta_counter_cols[ta_index] = matched_ta_col
+
+                    selected_upper = {str(k).strip().upper() for k in selected}
+                    ta_comparison_requested = (
+                        len(selected_upper) >= 2
+                        and (
+                            "TA DISTRIBUTION" in selected_upper
+                            or any(" VS TA" in name or name.endswith(" TA") for name in selected_upper)
+                        )
+                    )
+
+                    if ta_comparison_requested and ta_counter_cols:
+                        # Representative distances (metres) from the TA
+                        # Distribution bins. Index11 is open-ended (>76830 m),
+                        # so it is excluded from the numeric estimate rather
+                        # than assigning an unsupported midpoint.
+                        ta_midpoints_m = {
+                            0: 78.0,
+                            1: 195.0,
+                            2: 390.0,
+                            3: 780.0,
+                            4: 1482.0,
+                            5: 2730.0,
+                            6: 5070.0,
+                            7: 10530.0,
+                            8: 22230.0,
+                            9: 41730.0,
+                            10: 65130.0,
+                        }
+
+                        ta_source = analysis_df.copy()
+                        ta_source["_TA_Summary_Date"] = pd.to_datetime(
+                            ta_source["_Date_Day"], errors="coerce"
+                        ).dt.normalize()
+
+                        def _estimate_ta_km_for_range(start_value, end_value):
+                            start_value = pd.Timestamp(start_value).normalize()
+                            end_value = pd.Timestamp(end_value).normalize()
+                            ranged = ta_source[
+                                (ta_source["_TA_Summary_Date"] >= start_value)
+                                & (ta_source["_TA_Summary_Date"] <= end_value)
+                            ].copy()
+                            if ranged.empty:
+                                return pd.DataFrame()
+
+                            output_rows = []
+                            for identity_values, group in ranged.groupby(
+                                identity_cols, dropna=False, sort=False
+                            ):
+                                if not isinstance(identity_values, tuple):
+                                    identity_values = (identity_values,)
+                                weighted_distance = 0.0
+                                weighted_ue = 0.0
+                                for idx, midpoint in ta_midpoints_m.items():
+                                    col = ta_counter_cols.get(idx)
+                                    if col is None:
+                                        continue
+                                    counts = parse_kpi_numeric(group[col]).fillna(0).clip(lower=0)
+                                    total_count = float(counts.sum())
+                                    weighted_distance += total_count * midpoint
+                                    weighted_ue += total_count
+                                estimate_km = (
+                                    weighted_distance / weighted_ue / 1000.0
+                                    if weighted_ue > 0 else float("nan")
+                                )
+                                row = dict(zip(identity_cols, identity_values))
+                                row["Estimated TA (km)"] = estimate_km
+                                row["TA Remark"] = (
+                                    "High TA" if estimate_km > 4.0
+                                    else "Need Check" if pd.notna(estimate_km)
+                                    else "TA Data Unavailable"
+                                )
+                                output_rows.append(row)
+                            return pd.DataFrame(output_rows)
+
+                        ta_a = _estimate_ta_km_for_range(compare_a_start, compare_a_end)
+                        ta_b = _estimate_ta_km_for_range(compare_b_start, compare_b_end)
+
+                        if not ta_a.empty:
+                            ta_a = ta_a.rename(columns={
+                                "Estimated TA (km)": "Estimated TA A (km)",
+                                "TA Remark": "TA Remark A",
+                            })
+                            compare_summary = compare_summary.merge(
+                                ta_a, on=identity_cols, how="left"
+                            )
+                        if not ta_b.empty:
+                            ta_b = ta_b.rename(columns={
+                                "Estimated TA (km)": "Estimated TA B (km)",
+                                "TA Remark": "TA Remark B",
+                            })
+                            compare_summary = compare_summary.merge(
+                                ta_b, on=identity_cols, how="left"
+                            )
+
+                        for ta_col in [
+                            "Estimated TA A (km)", "TA Remark A",
+                            "Estimated TA B (km)", "TA Remark B",
+                        ]:
+                            if ta_col not in compare_summary.columns:
+                                compare_summary[ta_col] = pd.NA
+
+                        for ta_col in ["Estimated TA A (km)", "Estimated TA B (km)"]:
+                            compare_summary[ta_col] = pd.to_numeric(
+                                compare_summary[ta_col], errors="coerce"
+                            ).round(3)
+
+                        # Put TA diagnostics adjacent to each period's KPI result.
+                        preferred_compare_cols = [
+                            "No", "Cell Name", "LocalCell Id", "Sector",
+                            "FreqBand", "eNodeB Name", "Date A", "Date A KPI",
+                            "Remark A", "Estimated TA A (km)", "TA Remark A",
+                            "Date B", "Date B KPI", "Remark B",
+                            "Estimated TA B (km)", "TA Remark B", "Threshold",
+                        ]
+                        compare_cols = [
+                            col for col in preferred_compare_cols
+                            if col in compare_summary.columns
+                        ]
+                        compare_summary = compare_summary[compare_cols]
+
                     meet_a = int(
                         (compare_summary["Remark A"] == "Meet").sum()
                     )
