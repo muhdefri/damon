@@ -8051,6 +8051,10 @@ def render_configurable_kpi_analysis():
 
             is_payload = single_kpi.upper() == "PAYLOAD"
 
+            # Define chart-wide date bounds before building individual cell traces.
+            _global_x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
+            _global_x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
+
             for cell in sorted(cells):
                 cell_df = custom_df[
                     custom_df["_Analysis_Cell"].astype(str) == str(cell)
@@ -8065,7 +8069,11 @@ def render_configurable_kpi_analysis():
                 # edges even when that cell's first/last sample is later/earlier.
                 _trace_dates = pd.to_datetime(cell_df["_Chart_Date"]).tolist()
                 _trace_values = cell_values.tolist()
-                if _trace_dates and _global_x_min is not pd.NaT:
+                if (
+                    _trace_dates
+                    and pd.notna(_global_x_min)
+                    and pd.notna(_global_x_max)
+                ):
                     if _trace_dates[0] > _global_x_min:
                         _trace_dates.insert(0, _global_x_min)
                         _trace_values.insert(0, _trace_values[0])
@@ -8130,8 +8138,6 @@ def render_configurable_kpi_analysis():
                 )
 
             # Use the full data interval as the plot interval (no bar padding).
-            _global_x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
-            _global_x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
             custom_x_range = [_global_x_min, _global_x_max]
 
             def _single_axis_title(kpi):
