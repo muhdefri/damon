@@ -2692,6 +2692,10 @@ global_bulk_text = st.session_state.get(
 global_bulk_pairs = []
 global_bulk_cell_order = []
 
+def _bulk_norm_key(value):
+    """Normalize IDs for robust matching across Excel/CSV formatting."""
+    return re.sub(r"[^A-Z0-9]", "", str(value).strip().upper())
+
 if isinstance(global_bulk_text, str) and global_bulk_text.strip():
 
     global_available_cells = set(
@@ -2768,20 +2772,38 @@ if isinstance(global_bulk_text, str) and global_bulk_text.strip():
         for field in fields:
             field_upper = field.upper()
 
-            if field_upper in global_available_cells:
-                cell_value = field_upper
+            matched_cell = next(
+                (
+                    value for value in global_available_cells
+                    if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                ),
+                None,
+            )
+            if matched_cell is not None:
+                cell_value = matched_cell
                 break
 
         # Identify Site ID / eNodeB.
         for field in fields:
             field_upper = field.upper()
 
-            if field_upper in global_available_sites:
-                site_value = field_upper
-                break
-
-            if field_upper in global_available_enodebs:
-                site_value = field_upper
+            matched_site = next(
+                (
+                    value for value in global_available_sites
+                    if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                ),
+                None,
+            )
+            if matched_site is None:
+                matched_site = next(
+                    (
+                        value for value in global_available_enodebs
+                        if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                    ),
+                    None,
+                )
+            if matched_site is not None:
+                site_value = matched_site
                 break
 
         # Identify FreqBand.
@@ -2821,24 +2843,25 @@ if global_bulk_pairs:
         cell_mask = (
             site_df["_Cell_Display"]
             .astype(str)
-            .str.upper()
-            .eq(target_cell)
+            .map(_bulk_norm_key)
+            .eq(_bulk_norm_key(target_cell))
         )
 
-        if target_site.startswith("SUM-"):
-            site_mask = (
-                site_df["_Site_ID_Search"]
-                .astype(str)
-                .str.upper()
-                .eq(target_site)
-            )
-        else:
-            site_mask = (
-                site_df["_eNodeB_Search"]
-                .astype(str)
-                .str.upper()
-                .eq(target_site)
-            )
+        # Match the pasted site identifier against either source identifier
+        # column. Some CSV exports place the site label in the other field.
+        site_id_mask = (
+            site_df["_Site_ID_Search"]
+            .astype(str)
+            .map(_bulk_norm_key)
+            .eq(_bulk_norm_key(target_site))
+        )
+        enodeb_mask = (
+            site_df["_eNodeB_Search"]
+            .astype(str)
+            .map(_bulk_norm_key)
+            .eq(_bulk_norm_key(target_site))
+        )
+        site_mask = site_id_mask | enodeb_mask
 
         band_mask = (
             site_df["_FreqBand"]
@@ -6011,8 +6034,15 @@ def render_configurable_kpi_analysis():
                     # Identify Cell Name by exact match.
                     for field in fields:
                         field_upper = field.upper().strip()
-                        if field_upper in available_cells:
-                            cell_value = field_upper
+                        matched_cell = next(
+                            (
+                                value for value in available_cells
+                                if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                            ),
+                            None,
+                        )
+                        if matched_cell is not None:
+                            cell_value = matched_cell
                             break
 
                     # Identify Site ID or full eNodeB Name.
@@ -6028,12 +6058,23 @@ def render_configurable_kpi_analysis():
                             site_value = sum_match.group(1)
                             break
 
-                        if field_upper in available_enodebs:
-                            site_value = field_upper
-                            break
-
-                        if field_upper in available_sites:
-                            site_value = field_upper
+                        matched_site = next(
+                            (
+                                value for value in available_enodebs
+                                if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                            ),
+                            None,
+                        )
+                        if matched_site is None:
+                            matched_site = next(
+                                (
+                                    value for value in available_sites
+                                    if _bulk_norm_key(value) == _bulk_norm_key(field_upper)
+                                ),
+                                None,
+                            )
+                        if matched_site is not None:
+                            site_value = matched_site
                             break
 
                     # Identify FreqBand by exact normalized band.
@@ -6077,38 +6118,36 @@ def render_configurable_kpi_analysis():
                     band_value,
                 ) in analysis_cell_site_pairs:
 
-                    if site_value.startswith("SUM-"):
-                        pair_mask = (
-                            analysis_source["_Cell_Display"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(cell_value)
-                            & analysis_source["_Site_ID_Search"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(site_value)
-                            & analysis_source["_FreqBand"]
-                            .astype(str)
-                            .str.upper()
-                            .map(_normalize_bulk_band)
-                            .eq(band_value)
-                        )
-                    else:
-                        pair_mask = (
-                            analysis_source["_Cell_Display"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(cell_value)
-                            & analysis_source["_eNodeB_Search"]
-                            .astype(str)
-                            .str.upper()
-                            .eq(site_value)
-                            & analysis_source["_FreqBand"]
-                            .astype(str)
-                            .str.upper()
-                            .map(_normalize_bulk_band)
-                            .eq(band_value)
-                        )
+                    cell_match = (
+                        analysis_source["_Cell_Display"]
+                        .astype(str)
+                        .map(_bulk_norm_key)
+                        .eq(_bulk_norm_key(cell_value))
+                    )
+                    site_id_match = (
+                        analysis_source["_Site_ID_Search"]
+                        .astype(str)
+                        .map(_bulk_norm_key)
+                        .eq(_bulk_norm_key(site_value))
+                    )
+                    enodeb_match = (
+                        analysis_source["_eNodeB_Search"]
+                        .astype(str)
+                        .map(_bulk_norm_key)
+                        .eq(_bulk_norm_key(site_value))
+                    )
+                    band_match = (
+                        analysis_source["_FreqBand"]
+                        .astype(str)
+                        .str.upper()
+                        .map(_normalize_bulk_band)
+                        .eq(band_value)
+                    )
+                    pair_mask = (
+                        cell_match
+                        & (site_id_match | enodeb_match)
+                        & band_match
+                    )
 
                     if pair_mask.any():
                         valid_pairs.append(
@@ -6243,24 +6282,20 @@ def render_configurable_kpi_analysis():
                 cell_mask = (
                     site_filtered_source["_Cell_Display"]
                     .astype(str)
-                    .str.upper()
-                    .eq(cell_value)
+                    .map(_bulk_norm_key)
+                    .eq(_bulk_norm_key(cell_value))
                 )
 
-                if site_value.startswith("SUM-"):
-                    site_mask_pair = (
-                        site_filtered_source["_Site_ID_Search"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(site_value)
-                    )
-                else:
-                    site_mask_pair = (
-                        site_filtered_source["_eNodeB_Search"]
-                        .astype(str)
-                        .str.upper()
-                        .eq(site_value)
-                    )
+                site_mask_pair = (
+                    site_filtered_source["_Site_ID_Search"]
+                    .astype(str)
+                    .map(_bulk_norm_key)
+                    .eq(_bulk_norm_key(site_value))
+                    | site_filtered_source["_eNodeB_Search"]
+                    .astype(str)
+                    .map(_bulk_norm_key)
+                    .eq(_bulk_norm_key(site_value))
+                )
 
                 band_mask = (
                     site_filtered_source["_FreqBand"]
