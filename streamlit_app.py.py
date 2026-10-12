@@ -873,7 +873,7 @@ KPI_CONFIG = {
         "unit": "%",
     },
     "QPSK Distribution": {
-        "column": "QPSK Distribution",
+        "column": "ISL_BZG_QPSK Distribution",
         "category": "Radio/Coverage",
         "unit": "",
     },
@@ -2637,11 +2637,15 @@ with layout_col:
             "Horizontal",
             "Vertical",
             "2 Charts",
+            "KPI Analysis",
+            "KPI Status Transition",
         ],
         index=0,
         horizontal=True,
         help=(
-            "Choose one of the three chart layouts: Horizontal, Vertical, or 2 Charts."
+            "Choose one independent dashboard layout. "
+            "The existing four layouts remain unchanged; "
+            "KPI Status Transition is an additional comparison layout."
         ),
         key="chart_layout_selector",
     )
