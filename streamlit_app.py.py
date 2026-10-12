@@ -9018,6 +9018,14 @@ def render_configurable_kpi_analysis():
                             sort_cols
                         )
 
+                    # Display a sequential row number as the first column
+                    # in the Date A vs Date B summary only.
+                    compare_summary.insert(
+                        0,
+                        "No",
+                        range(1, len(compare_summary) + 1),
+                    )
+
                     for value_col in [
                         "Date A KPI",
                         "Date B KPI",
