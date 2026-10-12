@@ -8307,15 +8307,12 @@ def render_configurable_kpi_analysis():
                 yref=threshold_ref,
             )
 
-        if has_payload and not custom_df.empty:
-            custom_x_pad = _bar_xaxis_padding(
-                custom_df["_Chart_Date"]
-            )
+        if not custom_df.empty:
+            # KPI Analysis should use the actual data bounds so the plotted
+            # series reaches the left/right edges instead of leaving blank gutters.
             custom_x_range = [
-                custom_df["_Chart_Date"].min()
-                - custom_x_pad,
-                custom_df["_Chart_Date"].max()
-                + custom_x_pad,
+                custom_df["_Chart_Date"].min(),
+                custom_df["_Chart_Date"].max(),
             ]
         else:
             custom_x_range = None
@@ -8344,6 +8341,8 @@ def render_configurable_kpi_analysis():
                     if custom_x_range is not None
                     else True
                 ),
+                # Do not add Plotly's default horizontal padding to KPI dates.
+                constrain="domain",
             ),
             yaxis=dict(
                 title=left_axis_title,
