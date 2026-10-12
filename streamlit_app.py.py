@@ -8308,20 +8308,12 @@ def render_configurable_kpi_analysis():
             )
 
         if not custom_df.empty:
-            # Expand the data bounds by only a tiny fraction of the date span.
-            # This keeps the first/last samples visible while avoiding the large
-            # blank gutters caused by bar-oriented padding on line charts.
+            # For line charts, extend the visible x-range to the plot edges
+            # by removing date padding entirely. Plotly connects the first and
+            # last observations to their exact positions on this range.
             _x_min = pd.to_datetime(custom_df["_Chart_Date"]).min()
             _x_max = pd.to_datetime(custom_df["_Chart_Date"]).max()
-            _x_span = _x_max - _x_min
-            if _x_span == pd.Timedelta(0):
-                _x_pad = pd.Timedelta(minutes=1)
-            else:
-                _x_pad = _x_span * 0.002
-            custom_x_range = [
-                _x_min - _x_pad,
-                _x_max + _x_pad,
-            ]
+            custom_x_range = [_x_min, _x_max]
         else:
             custom_x_range = None
 
