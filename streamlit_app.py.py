@@ -7731,12 +7731,11 @@ def render_configurable_kpi_analysis():
                     yref=threshold_axis,
                 )
 
-            custom_x_pad = _bar_xaxis_padding(
-                custom_df["_Chart_Date"]
-            )
+            # Single-KPI line charts must not use bar-oriented x-axis padding:
+            # use the exact first/last timestamps so the line reaches both plot edges.
             custom_x_range = [
-                custom_df["_Chart_Date"].min() - custom_x_pad,
-                custom_df["_Chart_Date"].max() + custom_x_pad,
+                pd.to_datetime(custom_df["_Chart_Date"]).min(),
+                pd.to_datetime(custom_df["_Chart_Date"]).max(),
             ]
 
             def _axis_title(kpi):
