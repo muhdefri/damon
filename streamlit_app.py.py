@@ -6551,7 +6551,11 @@ def render_configurable_kpi_analysis():
     # Without Bulk mode, retain the normal manual filtering workflow.
     analysis_df = site_filtered_source.copy()
 
-    if analysis_bands_raw:
+    # In exact Bulk Cell + Site + FreqBand mode, the pasted triples
+    # already define the complete target dataset. Do not let stale or
+    # empty Streamlit multiselect state (Analysis FreqBand/Cell Name)
+    # erase valid rows from that exact target dataset.
+    if analysis_bands_raw and not analysis_cell_site_pairs:
         analysis_df = analysis_df[
             analysis_df["_FreqBand"]
             .astype(str)
@@ -6559,7 +6563,7 @@ def render_configurable_kpi_analysis():
             .isin(analysis_bands_raw)
         ].copy()
 
-    if effective_cell_level:
+    if effective_cell_level and not analysis_cell_site_pairs:
         if analysis_cells:
             analysis_df = analysis_df[
                 analysis_df["_Cell_Display"].isin(analysis_cells)
