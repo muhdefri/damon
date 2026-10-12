@@ -8880,9 +8880,14 @@ def render_configurable_kpi_analysis():
                 compare_a_start, compare_a_end = compare_date_a
                 compare_b_start, compare_b_end = compare_date_b
 
+                # Date A vs Date B only:
+                # Aggregate each selected date range independently with the
+                # same KPI-specific aggregation rule. The end date is inclusive.
+                # Do not combine Date A and Date B; merge their separate results
+                # only after each range has been aggregated.
                 def aggregate_for_date_range(selected_start, selected_end):
-                    start_ts = pd.Timestamp(selected_start)
-                    end_ts = pd.Timestamp(selected_end)
+                    start_ts = pd.Timestamp(selected_start).normalize()
+                    end_ts = pd.Timestamp(selected_end).normalize()
 
                     date_source = valid_summary_source[
                         (
@@ -9043,8 +9048,9 @@ def render_configurable_kpi_analysis():
                     st.caption(
                         f"Compare {date_a_label} vs {date_b_label}. "
                         f"Threshold = {threshold:g}. "
-                        "Each selected range is aggregated using "
-                        "the current KPI aggregation rule."
+                        "Date A and Date B are calculated independently "
+                        "using the same KPI aggregation rule; status is evaluated "
+                        "against the selected target for each period."
                     )
 
                     cm1, cm2, cm3, cm4 = st.columns(4)
