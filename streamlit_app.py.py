@@ -140,22 +140,20 @@ def render_twamp_dashboard():
     if enodeb_col is None:
         enodeb_col = next(
             (c for c in raw.columns
-             if (("enodeb" in _norm_col(c) or "nodeb" in _norm_col(c))
-                 and "name" in _norm_col(c))),
+             if "enodeb" in _norm_col(c) and "name" in _norm_col(c)),
             None,
         )
-    # Some daily exports place eNodeB Name in column B; hourly exports
-    # insert Time, shifting NodeB Name to column C. Use the header first,
-    # then the format-aware positional fallback only if needed.
+    # Daily exports commonly put eNodeB Name in column B; hourly exports
+    # put Date, Time, then NodeB/eNodeB Name in column C. Prefer header
+    # detection, then use resolution-aware positional fallback.
     if enodeb_col is None:
-        candidate_index = 2 if time_col is not None and len(raw.columns) > 2 else 1
-        if len(raw.columns) > candidate_index:
-            candidate_col = raw.columns[candidate_index]
-            candidate_values = raw[candidate_col].fillna("").astype(str).str.strip()
-            if candidate_values.ne("").mean() > 0.5 and candidate_values.str.contains(
+        likely_idx = 2 if time_col is not None and len(raw.columns) > 2 else 1
+        if len(raw.columns) > likely_idx:
+            candidate = raw.columns[likely_idx]
+            if raw[candidate].astype(str).str.contains(
                 r"#|LTE|NR|SUM-", case=False, regex=True
-            ).mean() > 0.5:
-                enodeb_col = candidate_col
+            ).mean() > 0.25:
+                enodeb_col = candidate
     site_col = tower_col or enodeb_col or next(
         (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
     )
@@ -299,16 +297,7 @@ def render_twamp_dashboard():
         rtt = pd.to_numeric(df[rtt_col], errors="coerce")
         rtt_fig = go.Figure()
         rtt_fig.add_trace(go.Scatter(x=df["_Date"], y=rtt, mode="lines+markers", name="Average RTT (ms)"))
-        rtt_fig.update_layout(
-            template="plotly_white",
-            height=360,
-            xaxis_title="Date / Time" if active_resolution == "Hourly" else "Date",
-            yaxis_title="RTT (ms)",
-        )
-        if active_resolution == "Hourly":
-            rtt_fig.update_xaxes(tickformat="%d %b<br>%H:%M", hoverformat="%d %b %Y %H:%M")
-        else:
-            rtt_fig.update_xaxes(tickformat="%d %b %Y", hoverformat="%d %b %Y")
+        rtt_fig.update_layout(template="plotly_white", height=360, xaxis_title="Date", yaxis_title="RTT (ms)")
         st.plotly_chart(rtt_fig, use_container_width=True)
 
     # ------------------------------------------------------------
@@ -493,10 +482,16 @@ def render_twamp_dashboard():
         ),
     )
     if active_resolution == "Hourly":
-        # Display clock time on the axis and full timestamp on hover for hourly files.
-        fig.update_xaxes(tickformat="%d %b<br>%H:%M", hoverformat="%d %b %Y %H:%M")
+        # Display clock time on hourly data so packet-loss spikes can be tied
+        # to a specific hour. Daily files retain date-only labels.
+        fig.update_xaxes(
+            tickformat="%d %b<br>%H:%M",
+            hoverformat="%d %b %Y %H:%M",
+            dtick=3 * 60 * 60 * 1000,
+            tickangle=0,
+        )
     else:
-        fig.update_xaxes(tickformat="%d %b %Y", hoverformat="%d %b %Y")
+        fig.update_xaxes(tickformat="%d %b", hoverformat="%d %b %Y")
 
     if chart_df.empty:
         st.info(f"Tidak ada site dengan kondisi '{selected_condition}' pada periode terpilih.")
@@ -1695,6 +1690,32 @@ def apply_internal_mapping(df, localcell_col):
     df["_FreqBand"] = df["_CI"].map(
         CI_TO_BAND
     )
+
+    # Site-specific master supplied for SUM-SB-PAD-0257. LocalCell IDs can
+    # be reused with different sector/band assignments across site plans, so
+    # keep these overrides scoped to this site rather than changing the
+    # global CI mapping for every site.
+    site_cols = [
+        c for c in df.columns
+        if re.sub(r"[^a-z0-9]", "", str(c).lower()) in {
+            "towerid", "siteid", "sitecode", "sitename",
+            "fullenodebname", "enodebname", "nodebname"
+        }
+    ]
+    if site_cols:
+        site_text = df[site_cols].fillna("").astype(str).agg(" ".join, axis=1).str.upper()
+        target_site = site_text.str.contains("SUM-SB-PAD-0257", regex=False)
+        site_master = {
+            33: (3, "900"),
+            18: (3, "1800"),
+            23: (3, "2100"),
+            43: (3, "2100"),
+            28: ("M3", "1800"),
+        }
+        for ci_value, (sector_value, band_value) in site_master.items():
+            mask = target_site & df["_CI"].eq(ci_value)
+            df.loc[mask, "_Sector_Number"] = sector_value
+            df.loc[mask, "_FreqBand"] = band_value
 
     df["_Sector_Display"] = df["_Sector_Number"].apply(
         normalize_sector
