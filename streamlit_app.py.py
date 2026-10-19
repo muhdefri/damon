@@ -132,8 +132,7 @@ def render_twamp_dashboard():
         "towerid", "tower", "siteid", "sitecode"
     }), None)
     enodeb_col = next((c for c in raw.columns if _norm_col(c) in {
-        "fullenodebname", "enodebname", "fullenodeb", "enodeb",
-        "nodebname", "fullnodebname", "nodeb"
+        "fullenodebname", "enodebname", "fullenodeb", "enodeb"
     }), None)
     # Robust fallback for exports where the eNodeB header contains extra text
     # or has been altered by spreadsheet/CSV tools.
@@ -143,17 +142,11 @@ def render_twamp_dashboard():
              if "enodeb" in _norm_col(c) and "name" in _norm_col(c)),
             None,
         )
-    # Daily exports commonly put eNodeB Name in column B; hourly exports
-    # put Date, Time, then NodeB/eNodeB Name in column C. Prefer header
-    # detection, then use resolution-aware positional fallback.
-    if enodeb_col is None:
-        likely_idx = 2 if time_col is not None and len(raw.columns) > 2 else 1
-        if len(raw.columns) > likely_idx:
-            candidate = raw.columns[likely_idx]
-            if raw[candidate].astype(str).str.contains(
-                r"#|LTE|NR|SUM-", case=False, regex=True
-            ).mean() > 0.25:
-                enodeb_col = candidate
+    # In the user's TWAMP export, column B is explicitly "eNodeB Name".
+    if enodeb_col is None and len(raw.columns) > 1:
+        second_col = raw.columns[1]
+        if raw[second_col].astype(str).str.contains(r"#|LTE|NR", case=False, regex=True).mean() > 0.5:
+            enodeb_col = second_col
     site_col = tower_col or enodeb_col or next(
         (c for c in raw.columns if _norm_col(c) in {"sitename", "site"}), None
     )
@@ -481,18 +474,6 @@ def render_twamp_dashboard():
             title=dict(text="Site / eNodeB"),
         ),
     )
-    if active_resolution == "Hourly":
-        # Display clock time on hourly data so packet-loss spikes can be tied
-        # to a specific hour. Daily files retain date-only labels.
-        fig.update_xaxes(
-            tickformat="%d %b<br>%H:%M",
-            hoverformat="%d %b %Y %H:%M",
-            dtick=3 * 60 * 60 * 1000,
-            tickangle=0,
-        )
-    else:
-        fig.update_xaxes(tickformat="%d %b", hoverformat="%d %b %Y")
-
     if chart_df.empty:
         st.info(f"Tidak ada site dengan kondisi '{selected_condition}' pada periode terpilih.")
     else:
@@ -1691,32 +1672,6 @@ def apply_internal_mapping(df, localcell_col):
         CI_TO_BAND
     )
 
-    # Site-specific master supplied for SUM-SB-PAD-0257. LocalCell IDs can
-    # be reused with different sector/band assignments across site plans, so
-    # keep these overrides scoped to this site rather than changing the
-    # global CI mapping for every site.
-    site_cols = [
-        c for c in df.columns
-        if re.sub(r"[^a-z0-9]", "", str(c).lower()) in {
-            "towerid", "siteid", "sitecode", "sitename",
-            "fullenodebname", "enodebname", "nodebname"
-        }
-    ]
-    if site_cols:
-        site_text = df[site_cols].fillna("").astype(str).agg(" ".join, axis=1).str.upper()
-        target_site = site_text.str.contains("SUM-SB-PAD-0257", regex=False)
-        site_master = {
-            33: (3, "900"),
-            18: (3, "1800"),
-            23: (3, "2100"),
-            43: (3, "2100"),
-            28: ("M3", "1800"),
-        }
-        for ci_value, (sector_value, band_value) in site_master.items():
-            mask = target_site & df["_CI"].eq(ci_value)
-            df.loc[mask, "_Sector_Number"] = sector_value
-            df.loc[mask, "_FreqBand"] = band_value
-
     df["_Sector_Display"] = df["_Sector_Number"].apply(
         normalize_sector
     )
@@ -2568,10 +2523,15 @@ quick_kpis = st.sidebar.multiselect(
 )
 
 # Add Quick KPI selections to the normal KPI selection.
+# Defensive fallback: keep the dashboard running even if the normal
+# KPI selector has not produced a list in the current rerun/session.
 # dict.fromkeys() removes duplicates while preserving order.
+if "selected_kpis" not in locals() or selected_kpis is None:
+    selected_kpis = []
+
 selected_kpis = list(
     dict.fromkeys(
-        selected_kpis + quick_kpis
+        list(selected_kpis) + list(quick_kpis)
     )
 )
 
