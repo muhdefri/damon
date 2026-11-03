@@ -9785,6 +9785,8 @@ def render_erab_failure_analysis():
                 else float("nan")
             )
 
+            # Display latest values above the trend, matching the MME panel.
+            # Values are taken from the most recent valid time bucket.
             with tnl_metric1:
                 if pd.notna(latest_tnl_rate):
                     st.metric(
@@ -9809,6 +9811,15 @@ def render_erab_failure_analysis():
                         "Counter RNL/TNL/MME tidak lengkap untuk menghitung "
                         "total parent failure."
                     )
+
+            if not latest_tnl.empty:
+                latest_tnl_time = latest_tnl["_Chart_Date"].iloc[0]
+                time_label = (
+                    latest_tnl_time.strftime("%d-%b-%Y %H:%M")
+                    if is_hourly
+                    else latest_tnl_time.strftime("%d-%b-%Y")
+                )
+                st.caption(f"Latest value timestamp: {time_label}")
 
             tnl_fig = go.Figure()
             for metric_name in [
