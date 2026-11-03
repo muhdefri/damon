@@ -539,6 +539,189 @@ def render_twamp_dashboard():
     else:
         st.plotly_chart(fig, use_container_width=True, config={"responsive": True})
 
+    # ------------------------------------------------------------
+    # Additional TWAMP KPI trend charts.
+    # These charts are isolated from the existing RTT / Packet Loss
+    # charts and reuse the same selected sites, date range and
+    # Site Condition filter. Existing chart logic remains unchanged.
+    # ------------------------------------------------------------
+    def _twamp_normalize_header(value):
+        return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+    def _find_twamp_metric_column(kind):
+        normalized_columns = {
+            _twamp_normalize_header(col): col for col in df.columns
+        }
+
+        if kind == "tti":
+            candidates = (
+                "lastttiratio",
+                "lastttiratio%",
+                "lastttiratio percent",
+            )
+            for candidate in candidates:
+                match = normalized_columns.get(_twamp_normalize_header(candidate))
+                if match is not None:
+                    return match
+            return next(
+                (
+                    col for col in df.columns
+                    if "lasttti" in _twamp_normalize_header(col)
+                    and "ratio" in _twamp_normalize_header(col)
+                ),
+                None,
+            )
+
+        # SCTP packet-loss exports may label the KPI as Packet Loss
+        # or as SCTP Drop Means. Do not match unrelated SCTP counters.
+        for col in df.columns:
+            normalized = _twamp_normalize_header(col)
+            if "sctp" in normalized and (
+                "packetloss" in normalized or "dropmeans" in normalized
+            ):
+                return col
+        return None
+
+    metric_chart_source = summary_source.copy()
+    if selected_condition != "All":
+        selected_condition_sites = (
+            condition_summary.loc[
+                condition_summary["Site Condition"].eq(selected_condition),
+                "Site Display",
+            ].astype(str).unique().tolist()
+            if not condition_summary.empty else []
+        )
+        metric_chart_source = metric_chart_source[
+            metric_chart_source["Site Display"].astype(str).isin(selected_condition_sites)
+        ].copy()
+
+    def _render_twamp_metric_trend(metric_kind, chart_title, axis_title):
+        metric_col = _find_twamp_metric_column(metric_kind)
+        if metric_col is None:
+            st.info(
+                f"Chart {chart_title} tidak ditampilkan karena kolom KPI "
+                "tidak ditemukan pada file TWAMP yang di-upload."
+            )
+            return
+
+        plot_source = metric_chart_source[
+            ["_Date", "Site Display", metric_col]
+        ].copy()
+        plot_source["_MetricValue"] = pd.to_numeric(
+            plot_source[metric_col]
+            .astype(str)
+            .str.replace("%", "", regex=False)
+            .str.replace(",", ".", regex=False)
+            .str.strip(),
+            errors="coerce",
+        )
+        plot_source = plot_source.dropna(
+            subset=["_Date", "_MetricValue"]
+        )
+
+        if active_resolution == "Daily":
+            plot_source["_ChartDate"] = plot_source["_Date"].dt.normalize()
+            plot_source = (
+                plot_source.groupby(
+                    ["Site Display", "_ChartDate"],
+                    as_index=False,
+                    dropna=False,
+                )["_MetricValue"]
+                .max()
+                .rename(columns={"_ChartDate": "_Date"})
+            )
+        else:
+            plot_source["_Date"] = pd.to_datetime(
+                plot_source["_Date"], errors="coerce"
+            )
+
+        plot_source = plot_source.dropna(subset=["_Date"]).sort_values("_Date")
+        st.subheader(chart_title)
+
+        if plot_source.empty:
+            st.info(f"Tidak ada data valid untuk {chart_title} pada filter saat ini.")
+            return
+
+        metric_fig = go.Figure()
+        for site_name, group in plot_source.groupby("Site Display", dropna=False):
+            group = group.sort_values("_Date")
+            metric_fig.add_trace(
+                go.Scatter(
+                    x=group["_Date"],
+                    y=group["_MetricValue"],
+                    mode="lines+markers",
+                    name=str(site_name),
+                    line=dict(width=2),
+                    hovertemplate=(
+                        "%{x}<br>"
+                        + axis_title
+                        + ": %{y:.4f}%<extra>%{fullData.name}</extra>"
+                    ),
+                )
+            )
+
+        metric_fig.update_layout(
+            template="plotly_white",
+            height=420,
+            autosize=True,
+            xaxis_title="Date / Time" if active_resolution == "Hourly" else "Date",
+            yaxis_title=axis_title,
+            hovermode="x unified",
+            legend_title_text="Site / eNodeB",
+            margin=dict(l=8, r=8, t=24, b=72),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.18,
+                xanchor="center",
+                x=0.5,
+                title=dict(text="Site / eNodeB"),
+            ),
+        )
+
+        if active_resolution == "Hourly":
+            period_hours = max(
+                (
+                    plot_source["_Date"].max()
+                    - plot_source["_Date"].min()
+                ).total_seconds() / 3600,
+                1,
+            )
+            tick_hours = (
+                1 if period_hours <= 24
+                else 3 if period_hours <= 72
+                else 6 if period_hours <= 168
+                else 12
+            )
+            metric_fig.update_xaxes(
+                tickformat="%d %b<br>%H:%M",
+                dtick=tick_hours * 60 * 60 * 1000,
+                tickangle=0,
+                hoverformat="%d %b %Y %H:%M",
+            )
+        else:
+            metric_fig.update_xaxes(
+                tickformat="%d %b",
+                hoverformat="%d %b %Y",
+            )
+
+        st.plotly_chart(
+            metric_fig,
+            use_container_width=True,
+            config={"responsive": True},
+        )
+
+    _render_twamp_metric_trend(
+        "tti",
+        "Last TTI Ratio (%)",
+        "Last TTI Ratio (%)",
+    )
+    _render_twamp_metric_trend(
+        "sctp",
+        "SCTP Packet Loss (%)",
+        "SCTP Packet Loss (%)",
+    )
+
     if not condition_summary.empty:
         condition_order = {
             "Persistent High": 0, "Recurring High": 1, "Spike": 2, "Normal": 3
