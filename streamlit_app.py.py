@@ -595,7 +595,7 @@ def render_twamp_dashboard():
             metric_chart_source["Site Display"].astype(str).isin(selected_condition_sites)
         ].copy()
 
-    def _render_twamp_metric_trend(metric_kind, chart_title, axis_title):
+    def _render_twamp_metric_trend(metric_kind, chart_title, axis_title, threshold, threshold_label):
         metric_col = _find_twamp_metric_column(metric_kind)
         if metric_col is None:
             st.info(
@@ -650,7 +650,7 @@ def render_twamp_dashboard():
                     x=group["_Date"],
                     y=group["_MetricValue"],
                     mode="lines+markers",
-                    name=str(site_name),
+                    name=str(site_name),  # Same Site Display / Site ID mapping as TWAMP Packet Loss
                     line=dict(width=2),
                     hovertemplate=(
                         "%{x}<br>"
@@ -659,6 +659,14 @@ def render_twamp_dashboard():
                     ),
                 )
             )
+
+        metric_fig.add_hline(
+            y=threshold,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=threshold_label,
+            annotation_position="top left",
+        )
 
         metric_fig.update_layout(
             template="plotly_white",
@@ -715,11 +723,15 @@ def render_twamp_dashboard():
         "tti",
         "Last TTI Ratio (%)",
         "Last TTI Ratio (%)",
+        40,
+        "High Threshold 40%",
     )
     _render_twamp_metric_trend(
         "sctp",
         "SCTP Packet Loss (%)",
         "SCTP Packet Loss (%)",
+        target,
+        "Target PL 0.7%",
     )
 
     if not condition_summary.empty:
