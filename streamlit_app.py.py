@@ -1484,6 +1484,11 @@ KPI_CONFIG = {
         "category": "Failure Counters",
         "unit": "",
     },
+    "E-RAB Setup Attempts": {
+        "column": "L.E-RAB.AttEst",
+        "category": "Failure Counters",
+        "unit": "",
+    },
 }
 
 # ============================================================
@@ -9548,6 +9553,205 @@ def render_erab_failure_analysis():
         "breakdown RNL pada chart kanan. Jangan menjumlahkan keduanya "
         "karena berisiko double counting."
     )
+
+
+    # ------------------------------------------------------------
+    # MME Failure Rate and Contribution
+    # Rate denominator: E-RAB setup attempts.
+    # Contribution denominator: sum of the independent parent causes
+    # (RNL + TNL + MME), never parent + child counters.
+    # ------------------------------------------------------------
+    mme_col = kpi_actual_columns.get("E-RAB FailEst - MME")
+    attempts_col = kpi_actual_columns.get("E-RAB Setup Attempts")
+    rnl_col = kpi_actual_columns.get("E-RAB FailEst - RNL")
+    tnl_col = kpi_actual_columns.get("E-RAB FailEst - TNL")
+
+    ratio_cols = [
+        c for c in [mme_col, attempts_col, rnl_col, tnl_col]
+        if c and c in site_df.columns
+    ]
+
+    if mme_col and mme_col in site_df.columns and ratio_cols:
+        ratio_source = site_df[["_Date"] + list(dict.fromkeys(ratio_cols))].copy()
+        ratio_source["_Chart_Date"] = pd.to_datetime(
+            ratio_source["_Date"], errors="coerce"
+        )
+        ratio_source = ratio_source.dropna(subset=["_Chart_Date"])
+
+        if not is_hourly:
+            ratio_source["_Chart_Date"] = ratio_source["_Chart_Date"].dt.normalize()
+
+        for col in ratio_cols:
+            ratio_source[col] = parse_kpi_numeric(ratio_source[col])
+
+        # Aggregate raw counts first, then calculate percentages.
+        ratio_agg = {}
+        for label, col in [
+            ("MME_Failure", mme_col),
+            ("E_RAB_Attempts", attempts_col),
+            ("RNL_Failure", rnl_col),
+            ("TNL_Failure", tnl_col),
+        ]:
+            if col and col in ratio_source.columns:
+                ratio_agg[label] = (col, lambda values: values.sum(min_count=1))
+
+        ratio_trend = (
+            ratio_source.groupby("_Chart_Date", as_index=False)
+            .agg(**ratio_agg)
+            .sort_values("_Chart_Date")
+        )
+
+        if "E_RAB_Attempts" in ratio_trend.columns:
+            valid_attempts = ratio_trend["E_RAB_Attempts"].where(
+                ratio_trend["E_RAB_Attempts"] > 0
+            )
+            ratio_trend["MME Failure Rate (%)"] = (
+                ratio_trend["MME_Failure"] / valid_attempts * 100
+            )
+        else:
+            ratio_trend["MME Failure Rate (%)"] = float("nan")
+
+        parent_causes_available = all(
+            name in ratio_trend.columns
+            for name in ["RNL_Failure", "TNL_Failure", "MME_Failure"]
+        )
+        if parent_causes_available:
+            total_parent_failures = (
+                ratio_trend["RNL_Failure"]
+                + ratio_trend["TNL_Failure"]
+                + ratio_trend["MME_Failure"]
+            )
+            valid_total_failures = total_parent_failures.where(
+                total_parent_failures > 0
+            )
+            ratio_trend["MME Contribution (%)"] = (
+                ratio_trend["MME_Failure"] / valid_total_failures * 100
+            )
+        else:
+            ratio_trend["MME Contribution (%)"] = float("nan")
+
+        st.markdown("#### MME Failure Rate & Contribution")
+
+        latest = ratio_trend.dropna(subset=["_Chart_Date"]).tail(1)
+        metric1, metric2 = st.columns(2, gap="small")
+
+        latest_rate = (
+            latest["MME Failure Rate (%)"].iloc[0]
+            if not latest.empty and "MME Failure Rate (%)" in latest
+            else float("nan")
+        )
+        latest_contribution = (
+            latest["MME Contribution (%)"].iloc[0]
+            if not latest.empty and "MME Contribution (%)" in latest
+            else float("nan")
+        )
+
+        with metric1:
+            if pd.notna(latest_rate):
+                st.metric("Latest MME Failure Rate", f"{latest_rate:.2f}%")
+            else:
+                st.metric("Latest MME Failure Rate", "N/A")
+                st.caption(
+                    "Counter L.E-RAB.AttEst tidak ditemukan atau nilainya 0."
+                )
+
+        with metric2:
+            if pd.notna(latest_contribution):
+                st.metric(
+                    "Latest MME Contribution",
+                    f"{latest_contribution:.2f}%",
+                )
+            else:
+                st.metric("Latest MME Contribution", "N/A")
+                st.caption(
+                    "Counter RNL/TNL/MME tidak lengkap untuk menghitung "
+                    "total parent failure."
+                )
+
+        ratio_fig = go.Figure()
+        for metric_name in [
+            "MME Failure Rate (%)",
+            "MME Contribution (%)",
+        ]:
+            if metric_name in ratio_trend.columns and ratio_trend[metric_name].notna().any():
+                ratio_fig.add_trace(
+                    go.Scatter(
+                        x=ratio_trend["_Chart_Date"],
+                        y=ratio_trend[metric_name],
+                        name=metric_name,
+                        mode="lines+markers",
+                        line=dict(width=2.5),
+                        marker=dict(size=5),
+                        connectgaps=False,
+                        hovertemplate=(
+                            "<b>%{fullData.name}</b><br>"
+                            + (
+                                "%{x|%d-%b-%Y %H:%M}<br>"
+                                if is_hourly
+                                else "%{x|%d-%b-%Y}<br>"
+                            )
+                            + "Value: %{y:.2f}%<extra></extra>"
+                        ),
+                    )
+                )
+
+        if ratio_fig.data:
+            ratio_fig.update_layout(
+                title="MME Failure Rate vs MME Contribution",
+                height=360,
+                template="plotly_white",
+                margin=dict(l=45, r=20, t=55, b=75),
+                hovermode="x unified",
+                xaxis=dict(
+                    title="Date / Time",
+                    tickformat=tickformat,
+                    hoverformat=hoverformat,
+                    dtick=dtick,
+                    range=[
+                        ratio_trend["_Chart_Date"].min(),
+                        ratio_trend["_Chart_Date"].max(),
+                    ],
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    automargin=True,
+                ),
+                yaxis=dict(
+                    title="Percentage (%)",
+                    rangemode="tozero",
+                    showgrid=True,
+                    gridcolor="#e5e5e5",
+                    zeroline=False,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.22,
+                    xanchor="center",
+                    x=0.5,
+                ),
+            )
+            st.plotly_chart(
+                ratio_fig,
+                use_container_width=True,
+                key="mme_failure_rate_contribution_trend",
+            )
+
+        if attempts_col not in ratio_cols:
+            st.warning(
+                "MME Failure Rate belum dapat dihitung karena counter "
+                "L.E-RAB.AttEst tidak ditemukan pada CSV. Pastikan counter "
+                "tersebut ikut diekspor dari Huawei."
+            )
+        if not parent_causes_available:
+            st.warning(
+                "MME Contribution belum dapat dihitung karena salah satu "
+                "counter parent RNL/TNL/MME tidak tersedia pada CSV."
+            )
+    else:
+        st.info(
+            "MME Failure Rate & Contribution tidak dapat ditampilkan karena "
+            "counter MME tidak tersedia pada data terpilih."
+        )
 
 
 
