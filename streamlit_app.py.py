@@ -9772,7 +9772,7 @@ def render_erab_failure_analysis():
 
             st.markdown("#### TNL Failure Rate & Contribution")
             latest_tnl = ratio_trend.dropna(subset=["_Chart_Date"]).tail(1)
-            tnl_metric1, tnl_metric2 = st.columns(2, gap="small")
+            tnl_metric1, tnl_metric2, tnl_metric3 = st.columns(3, gap="small")
 
             latest_tnl_rate = (
                 latest_tnl["TNL Failure Rate (%)"].iloc[0]
@@ -9782,6 +9782,11 @@ def render_erab_failure_analysis():
             latest_tnl_contribution = (
                 latest_tnl["TNL Contribution (%)"].iloc[0]
                 if not latest_tnl.empty
+                else float("nan")
+            )
+            latest_tnl_count = (
+                latest_tnl["TNL_Failure"].iloc[0]
+                if not latest_tnl.empty and "TNL_Failure" in latest_tnl.columns
                 else float("nan")
             )
 
@@ -9811,6 +9816,15 @@ def render_erab_failure_analysis():
                         "Counter RNL/TNL/MME tidak lengkap untuk menghitung "
                         "total parent failure."
                     )
+
+            with tnl_metric3:
+                if pd.notna(latest_tnl_count):
+                    st.metric(
+                        "Latest TNL Failure Count",
+                        f"{latest_tnl_count:,.0f}",
+                    )
+                else:
+                    st.metric("Latest TNL Failure Count", "N/A")
 
             if not latest_tnl.empty:
                 latest_tnl_time = latest_tnl["_Chart_Date"].iloc[0]
