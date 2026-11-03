@@ -1479,6 +1479,11 @@ KPI_CONFIG = {
         "category": "Failure Counters",
         "unit": "",
     },
+    "E-RAB FailEst - SRBReset": {
+        "column": "L.E-RAB.FailEst.SRBReset",
+        "category": "Failure Counters",
+        "unit": "",
+    },
 }
 
 # ============================================================
@@ -9360,6 +9365,192 @@ def _bar_xaxis_padding(series):
     return diffs.min() / 2
 
 
+
+def render_erab_failure_analysis():
+    """
+    Render E-RAB establishment failure counters beneath the main KPI charts.
+    Parent categories (RNL/TNL/MME) and the RNL breakdown are separated
+    to avoid adding parent and child counters together.
+    """
+    if site_df.empty:
+        return
+
+    parent_counter_map = [
+        ("RNL", "E-RAB FailEst - RNL"),
+        ("TNL", "E-RAB FailEst - TNL"),
+        ("MME", "E-RAB FailEst - MME"),
+    ]
+    rnl_breakdown_map = [
+        ("NoReply", "E-RAB FailEst - No Reply"),
+        ("NoRadioRes", "E-RAB FailEst - No Radio Resource"),
+        ("SRBReset", "E-RAB FailEst - SRBReset"),
+    ]
+
+    def resolve_counter_items(items):
+        resolved = []
+        for label, configured_name in items:
+            actual = kpi_actual_columns.get(configured_name)
+            if actual and actual in site_df.columns:
+                resolved.append((label, actual))
+        return resolved
+
+    parent_items = resolve_counter_items(parent_counter_map)
+    breakdown_items = resolve_counter_items(rnl_breakdown_map)
+
+    if not parent_items and not breakdown_items:
+        return
+
+    date_col = "_Date"
+    if date_col not in site_df.columns:
+        return
+
+    required_counter_cols = list(dict.fromkeys(
+        [col for _, col in parent_items + breakdown_items]
+    ))
+    source = site_df[[date_col] + required_counter_cols].copy()
+    source["_Chart_Date"] = pd.to_datetime(
+        source[date_col], errors="coerce"
+    )
+    source = source.dropna(subset=["_Chart_Date"])
+
+    if source.empty:
+        return
+
+    if not is_hourly:
+        source["_Chart_Date"] = source["_Chart_Date"].dt.normalize()
+
+    for label, actual in parent_items + breakdown_items:
+        source[actual] = parse_kpi_numeric(source[actual])
+
+    # Counters are additive across the cells currently selected in the
+    # dashboard. min_count=1 preserves missing data as NaN, not zero.
+    aggregate_map = {
+        label: (actual, lambda values: values.sum(min_count=1))
+        for label, actual in parent_items + breakdown_items
+    }
+    trend_df = (
+        source.groupby("_Chart_Date", as_index=False)
+        .agg(**aggregate_map)
+        .sort_values("_Chart_Date")
+    )
+
+    if trend_df.empty:
+        return
+
+    tickformat = "%H:%M<br>%d-%b" if is_hourly else "%d-%b-%y"
+    hoverformat = "%d-%b-%Y %H:%M" if is_hourly else "%d-%b-%Y"
+    dtick = 6 * 60 * 60 * 1000 if is_hourly else None
+
+    st.markdown("### E-RAB Setup Failure Analysis")
+    st.caption(
+        "Trend counter dihitung sebagai total dari cell/sector/band yang "
+        "sedang dipilih. Nilai ditampilkan sebagai jumlah failure, bukan %."
+    )
+
+    chart_left, chart_right = st.columns(2, gap="small")
+
+    def build_failure_figure(items, title, key):
+        fig = go.Figure()
+        for label, _actual in items:
+            if label not in trend_df.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=trend_df["_Chart_Date"],
+                    y=trend_df[label],
+                    name=label,
+                    mode="lines+markers",
+                    line=dict(width=2.5),
+                    marker=dict(size=5),
+                    connectgaps=False,
+                    hovertemplate=(
+                        "<b>%{fullData.name}</b><br>"
+                        + (
+                            "%{x|%d-%b-%Y %H:%M}<br>"
+                            if is_hourly
+                            else "%{x|%d-%b-%Y}<br>"
+                        )
+                        + "Failure Count: %{y:,.0f}<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.update_layout(
+            title=title,
+            height=390,
+            template="plotly_white",
+            margin=dict(l=45, r=20, t=55, b=80),
+            hovermode="x unified",
+            xaxis=dict(
+                title="Date / Time",
+                tickformat=tickformat,
+                hoverformat=hoverformat,
+                dtick=dtick,
+                showgrid=True,
+                gridcolor="#e5e5e5",
+                range=[
+                    trend_df["_Chart_Date"].min(),
+                    trend_df["_Chart_Date"].max(),
+                ],
+                automargin=True,
+            ),
+            yaxis=dict(
+                title="Failure Count",
+                rangemode="tozero",
+                showgrid=True,
+                gridcolor="#e5e5e5",
+                zeroline=False,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.22,
+                xanchor="center",
+                x=0.5,
+            ),
+        )
+        return fig
+
+    with chart_left:
+        if parent_items:
+            st.plotly_chart(
+                build_failure_figure(
+                    parent_items,
+                    "E-RAB Failure Category — RNL / TNL / MME",
+                    "erab_failure_category",
+                ),
+                use_container_width=True,
+                key="erab_failure_category_trend",
+            )
+        else:
+            st.info("Counter RNL/TNL/MME tidak ditemukan pada CSV ini.")
+
+    with chart_right:
+        if breakdown_items:
+            st.plotly_chart(
+                build_failure_figure(
+                    breakdown_items,
+                    "RNL Failure Breakdown",
+                    "rnl_failure_breakdown",
+                ),
+                use_container_width=True,
+                key="rnl_failure_breakdown_trend",
+            )
+        else:
+            st.info(
+                "Counter NoReply/NoRadioRes/SRBReset tidak ditemukan "
+                "pada CSV ini."
+            )
+
+    st.caption(
+        "Catatan: RNL ditampilkan sebagai kategori induk pada chart kiri. "
+        "NoReply, NoRadioRes, dan SRBReset ditampilkan terpisah sebagai "
+        "breakdown RNL pada chart kanan. Jangan menjumlahkan keduanya "
+        "karena berisiko double counting."
+    )
+
+
+
 # KPI Analysis and KPI Status Transition are independent Chart Layouts.
 # When either is selected, the normal Horizontal / Vertical / 2 Charts
 # renderer is bypassed and only its dedicated section is shown.
@@ -9369,6 +9560,13 @@ if chart_layout == "KPI Analysis":
 
 if chart_layout == "KPI Status Transition":
     render_kpi_status_transition()
+
+
+# Show E-RAB failure diagnostics below the normal KPI charts.
+# The independent KPI Analysis / Status Transition layouts retain
+# their own chart flow and are not mixed with this main-dashboard panel.
+if chart_layout not in {"KPI Analysis", "KPI Status Transition"}:
+    render_erab_failure_analysis()
 
 
 # ============================================================
