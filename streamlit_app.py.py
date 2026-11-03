@@ -2021,7 +2021,7 @@ else:
     st.stop()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=2)
 def get_csv_headers(file_bytes, compression=None):
     """Read only the CSV header once and cache it."""
     header_df = pd.read_csv(
@@ -2035,7 +2035,7 @@ def get_csv_headers(file_bytes, compression=None):
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1)
 def load_and_prepare_csv(
     file_bytes,
     usecols,
@@ -2062,6 +2062,7 @@ def load_and_prepare_csv(
         compression=compression,
         usecols=list(usecols),
         low_memory=False,
+        engine="c",
     )
 
     frame.columns = [
@@ -2091,8 +2092,13 @@ def load_and_prepare_csv(
         )
         frame["_Is_Hourly"] = False
 
-    frame["_Site_ID"] = frame[enodeb_column].apply(
-        extract_sum_site
+    # Vectorized equivalent of extract_sum_site(): extract SUM-... up to '#'.
+    # Avoid Python-level per-row function calls on multi-million-row CSVs.
+    frame["_Site_ID"] = (
+        frame[enodeb_column]
+        .astype("string")
+        .str.extract(r"(SUM-[^#]+)", expand=False)
+        .str.strip()
     )
 
     frame["_Site_ID_Search"] = (
@@ -2115,10 +2121,15 @@ def load_and_prepare_csv(
         localcell_column,
     )
 
-    frame["_Sector_Display"] = (
-        frame["_Sector_Number"]
-        .apply(normalize_sector)
+    # Vectorized sector label normalization.
+    sector_text = frame["_Sector_Number"].astype("string").str.strip()
+    frame["_Sector_Display"] = sector_text
+    frame.loc[sector_text.eq("0").fillna(False), "_Sector_Display"] = "Indoor"
+    sector_is_numeric = sector_text.str.fullmatch(r"\d+", na=False)
+    frame.loc[sector_is_numeric, "_Sector_Display"] = (
+        "S" + sector_text.loc[sector_is_numeric]
     )
+    frame["_Sector_Display"] = frame["_Sector_Display"].fillna("")
 
     frame["_Sector_Search"] = (
         frame["_Sector_Display"]
@@ -2131,9 +2142,41 @@ def load_and_prepare_csv(
     # This prevents Plotly from creating two traces for the same cell
     # when the raw CSV contains hidden Unicode characters, NBSPs,
     # repeated spaces, or case differences.
-    frame["_Cell_Display"] = frame[cell_column].apply(
-        normalize_cell_name
+    # Vectorized cell-name normalization (NFKC, invisible characters,
+    # NBSP, whitespace collapse and uppercase) to avoid Python apply per row.
+    cell_text = frame[cell_column].astype("string").str.normalize("NFKC")
+    cell_text = (
+        cell_text
+        .str.replace("\u200b", "", regex=False)
+        .str.replace("\u200c", "", regex=False)
+        .str.replace("\u200d", "", regex=False)
+        .str.replace("\ufeff", "", regex=False)
+        .str.replace("\xa0", " ", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+        .str.upper()
     )
+    frame["_Cell_Display"] = cell_text.fillna("")
+
+    # Identifier columns repeat heavily in telecom KPI exports. Categoricals
+    # reduce RAM without changing displayed values or KPI numeric precision.
+    for _id_col in [
+        enodeb_column,
+        cell_column,
+        "_Site_ID",
+        "_Site_ID_Search",
+        "_eNodeB_Search",
+        "_Sector_Display",
+        "_Sector_Search",
+        "_Cell_Display",
+        "_FreqBand",
+    ]:
+        if _id_col in frame.columns:
+            _series = frame[_id_col]
+            if not isinstance(_series.dtype, pd.CategoricalDtype):
+                _unique_ratio = _series.nunique(dropna=False) / max(len(_series), 1)
+                if _unique_ratio <= 0.50:
+                    frame[_id_col] = _series.astype("category")
 
     return frame
 
@@ -2141,10 +2184,12 @@ def load_and_prepare_csv(
 # UploadedFile itself is intentionally not passed into cache_data.
 # Bytes give Streamlit a stable, cacheable input for the same file.
 file_bytes = uploaded_csv.getvalue()
+uploaded_size_mb = len(file_bytes) / (1024 * 1024)
 
 st.sidebar.caption(
     f"Loaded format: {'CSV.GZ (gzip)' if input_compression == 'gzip' else 'CSV'}"
 )
+st.sidebar.caption(f"Uploaded file size: {uploaded_size_mb:,.1f} MB")
 
 with st.spinner("Preparing KPI CSV..."):
 
@@ -2316,6 +2361,12 @@ with st.spinner("Preparing KPI CSV..."):
         date_col,
         time_col,
         compression=input_compression,
+    )
+
+    _df_memory_mb = df.memory_usage(index=True, deep=True).sum() / (1024 * 1024)
+    st.sidebar.caption(
+        f"Prepared data: {len(df):,} rows × {len(df.columns):,} columns "
+        f"({ _df_memory_mb:,.0f} MB in memory)"
     )
 
 # ============================================================
