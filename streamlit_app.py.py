@@ -2602,18 +2602,13 @@ ordered_sectors += sorted(
     if value not in ordered_sectors
 )
 
-if ordered_sectors:
-
-    # Selection is rendered in the top Chart Layout control area below.
-    selected_sectors = ordered_sectors.copy()
-
-else:
-
-    selected_sectors = []
-
+if not ordered_sectors:
     st.sidebar.warning(
         "No Sector mapping found for this site."
     )
+
+# Sector selection is intentionally empty by default and is controlled
+# only by the Select Sector widget in Chart Controls.
 
 # ============================================================
 # SIDEBAR — FREQBAND FILTER
@@ -2682,7 +2677,7 @@ for category in category_order:
         category,
         category_kpis,
         default=[] ,
-        key=f"kpi_{category}",
+        key=f"kpi_{category}_v2",
     )
 
     selected_kpis.extend(selected)
@@ -2797,8 +2792,7 @@ QUICK_KPI = [
     "QPSK Distribution",
     "Sum_L.Traffic.User.Avg",
 
-    # Remaining KPI 1 items
-    "SSSR",
+    # Remaining KPI 1 items (SSSR intentionally excluded; select it manually in Accessibility)
     "RRC Setup SR",
     "E-RAB Setup SR",
     "DL Payload",
@@ -2817,7 +2811,7 @@ quick_kpis = st.sidebar.multiselect(
     "Quick KPI",
     quick_kpi_options,
     default=quick_kpi_options,
-    key="quick_kpi_selection_v2",
+    key="quick_kpi_selection_v3",
 )
 
 # Add Quick KPI selections to the normal KPI selection.
@@ -2874,7 +2868,9 @@ with sector_col:
     selected_sectors = st.multiselect(
         "Select Sector",
         ordered_sectors,
-        default=ordered_sectors,
+        default=[],
+        key="select_sector_v2",
+        help="Pilih sector yang ingin ditampilkan. Default kosong agar dashboard lebih ringan saat pertama dibuka.",
     )
 
 with band_col:
@@ -3116,12 +3112,15 @@ if global_bulk_pairs:
 site_level_df = site_df.copy()
 
 # Apply both chart filters before KPI processing.
+# With no sector selected, keep the chart dataset empty intentionally so
+# heavy KPI aggregation/chart generation does not run on every sector.
 if selected_sectors:
     site_df = site_df[
         site_df["_Sector_Search"].isin(selected_sectors)
     ].copy()
 else:
     site_df = site_df.iloc[0:0].copy()
+    st.info("Pilih minimal satu Sector pada Select Sector untuk menampilkan chart KPI.")
 
 if selected_bands:
     site_df = site_df[
