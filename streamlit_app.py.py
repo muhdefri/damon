@@ -9747,6 +9747,144 @@ def render_erab_failure_analysis():
                 "MME Contribution belum dapat dihitung karena salah satu "
                 "counter parent RNL/TNL/MME tidak tersedia pada CSV."
             )
+
+        # ------------------------------------------------------------
+        # TNL Failure Rate and Contribution — same selected site scope
+        # ------------------------------------------------------------
+        tnl_col_for_rate = tnl_col
+        if tnl_col_for_rate and "TNL_Failure" in ratio_trend.columns:
+            if "E_RAB_Attempts" in ratio_trend.columns:
+                valid_attempts_tnl = ratio_trend["E_RAB_Attempts"].where(
+                    ratio_trend["E_RAB_Attempts"] > 0
+                )
+                ratio_trend["TNL Failure Rate (%)"] = (
+                    ratio_trend["TNL_Failure"] / valid_attempts_tnl * 100
+                )
+            else:
+                ratio_trend["TNL Failure Rate (%)"] = float("nan")
+
+            if parent_causes_available:
+                ratio_trend["TNL Contribution (%)"] = (
+                    ratio_trend["TNL_Failure"] / valid_total_failures * 100
+                )
+            else:
+                ratio_trend["TNL Contribution (%)"] = float("nan")
+
+            st.markdown("#### TNL Failure Rate & Contribution")
+            latest_tnl = ratio_trend.dropna(subset=["_Chart_Date"]).tail(1)
+            tnl_metric1, tnl_metric2 = st.columns(2, gap="small")
+
+            latest_tnl_rate = (
+                latest_tnl["TNL Failure Rate (%)"].iloc[0]
+                if not latest_tnl.empty
+                else float("nan")
+            )
+            latest_tnl_contribution = (
+                latest_tnl["TNL Contribution (%)"].iloc[0]
+                if not latest_tnl.empty
+                else float("nan")
+            )
+
+            with tnl_metric1:
+                if pd.notna(latest_tnl_rate):
+                    st.metric(
+                        "Latest TNL Failure Rate",
+                        f"{latest_tnl_rate:.2f}%",
+                    )
+                else:
+                    st.metric("Latest TNL Failure Rate", "N/A")
+                    st.caption(
+                        "Counter L.E-RAB.AttEst tidak ditemukan atau nilainya 0."
+                    )
+
+            with tnl_metric2:
+                if pd.notna(latest_tnl_contribution):
+                    st.metric(
+                        "Latest TNL Contribution",
+                        f"{latest_tnl_contribution:.2f}%",
+                    )
+                else:
+                    st.metric("Latest TNL Contribution", "N/A")
+                    st.caption(
+                        "Counter RNL/TNL/MME tidak lengkap untuk menghitung "
+                        "total parent failure."
+                    )
+
+            tnl_fig = go.Figure()
+            for metric_name in [
+                "TNL Failure Rate (%)",
+                "TNL Contribution (%)",
+            ]:
+                if (
+                    metric_name in ratio_trend.columns
+                    and ratio_trend[metric_name].notna().any()
+                ):
+                    tnl_fig.add_trace(
+                        go.Scatter(
+                            x=ratio_trend["_Chart_Date"],
+                            y=ratio_trend[metric_name],
+                            name=metric_name,
+                            mode="lines+markers",
+                            line=dict(width=2.5),
+                            marker=dict(size=5),
+                            connectgaps=False,
+                            hovertemplate=(
+                                "<b>%{fullData.name}</b><br>"
+                                + (
+                                    "%{x|%d-%b-%Y %H:%M}<br>"
+                                    if is_hourly
+                                    else "%{x|%d-%b-%Y}<br>"
+                                )
+                                + "Value: %{y:.2f}%<extra></extra>"
+                            ),
+                        )
+                    )
+
+            if tnl_fig.data:
+                tnl_fig.update_layout(
+                    title="TNL Failure Rate vs TNL Contribution",
+                    height=360,
+                    template="plotly_white",
+                    margin=dict(l=45, r=20, t=55, b=75),
+                    hovermode="x unified",
+                    xaxis=dict(
+                        title="Date / Time",
+                        tickformat=tickformat,
+                        hoverformat=hoverformat,
+                        dtick=dtick,
+                        range=[
+                            ratio_trend["_Chart_Date"].min(),
+                            ratio_trend["_Chart_Date"].max(),
+                        ],
+                        showgrid=True,
+                        gridcolor="#e5e5e5",
+                        automargin=True,
+                    ),
+                    yaxis=dict(
+                        title="Percentage (%)",
+                        rangemode="tozero",
+                        showgrid=True,
+                        gridcolor="#e5e5e5",
+                        zeroline=False,
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top",
+                        y=-0.22,
+                        xanchor="center",
+                        x=0.5,
+                    ),
+                )
+                st.plotly_chart(
+                    tnl_fig,
+                    use_container_width=True,
+                    key="tnl_failure_rate_contribution_trend",
+                )
+        else:
+            st.info(
+                "Counter L.E-RAB.FailEst.TNL tidak ditemukan pada CSV "
+                "untuk site/filter yang dipilih."
+            )
     else:
         st.info(
             "MME Failure Rate & Contribution tidak dapat ditampilkan karena "
