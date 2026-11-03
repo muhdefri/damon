@@ -2681,12 +2681,7 @@ for category in category_order:
     selected = st.sidebar.multiselect(
         category,
         category_kpis,
-        default=(
-            ["SSSR"]
-            if category == "Accessibility"
-            and "SSSR" in category_kpis
-            else []
-        ),
+        default=[] ,
         key=f"kpi_{category}",
     )
 
@@ -2811,16 +2806,18 @@ QUICK_KPI = [
     "E-RAB Setup SR VoIP",
 ]
 
+quick_kpi_options = [
+    kpi
+    for kpi in QUICK_KPI
+    if kpi in KPI_CONFIG
+    and kpi in kpi_actual_columns
+]
+
 quick_kpis = st.sidebar.multiselect(
     "Quick KPI",
-    [
-        kpi
-        for kpi in QUICK_KPI
-        if kpi in KPI_CONFIG
-        and kpi in kpi_actual_columns
-    ],
-    default=[],
-    key="quick_kpi_selection",
+    quick_kpi_options,
+    default=quick_kpi_options,
+    key="quick_kpi_selection_v2",
 )
 
 # Add Quick KPI selections to the normal KPI selection.
@@ -2863,14 +2860,14 @@ with layout_col:
             "KPI Analysis",
             "KPI Status Transition",
         ],
-        index=0,
+        index=2,
         horizontal=True,
         help=(
             "Choose one independent dashboard layout. "
             "The existing four layouts remain unchanged; "
             "KPI Status Transition is an additional comparison layout."
         ),
-        key="chart_layout_selector",
+        key="chart_layout_selector_v2",
     )
 
 with sector_col:
