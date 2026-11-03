@@ -651,6 +651,7 @@ def render_twamp_dashboard():
                     y=group["_MetricValue"],
                     mode="lines+markers",
                     name=str(site_name),  # Same Site Display / Site ID mapping as TWAMP Packet Loss
+                    showlegend=True,
                     line=dict(width=2),
                     hovertemplate=(
                         "%{x}<br>"
@@ -670,7 +671,8 @@ def render_twamp_dashboard():
 
         metric_fig.update_layout(
             template="plotly_white",
-            height=420,
+            showlegend=True,
+            height=520,
             autosize=True,
             xaxis_title="Date / Time" if active_resolution == "Hourly" else "Date",
             yaxis_title=axis_title,
