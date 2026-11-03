@@ -534,6 +534,18 @@ def render_twamp_dashboard():
             hoverformat="%d %b %Y",
         )
 
+    # Lock the x-axis to the actual data interval. Plotly otherwise adds
+    # automatic padding on both ends, creating visible empty gaps.
+    if not chart_df.empty:
+        _x_min = pd.to_datetime(chart_df["_Date"], errors="coerce").min()
+        _x_max = pd.to_datetime(chart_df["_Date"], errors="coerce").max()
+        if pd.notna(_x_min) and pd.notna(_x_max):
+            if _x_min == _x_max:
+                _single_point_pad = pd.Timedelta(hours=0.5 if active_resolution == "Hourly" else 12)
+                _x_min -= _single_point_pad
+                _x_max += _single_point_pad
+            fig.update_xaxes(range=[_x_min, _x_max], autorange=False)
+
     if chart_df.empty:
         st.info(f"Tidak ada site dengan kondisi '{selected_condition}' pada periode terpilih.")
     else:
@@ -713,6 +725,20 @@ def render_twamp_dashboard():
             metric_fig.update_xaxes(
                 tickformat="%d %b",
                 hoverformat="%d %b %Y",
+            )
+
+        # Use the first and last actual KPI timestamps as the axis limits.
+        # This removes Plotly's default blank padding on the left and right.
+        _metric_x_min = pd.to_datetime(plot_source["_Date"], errors="coerce").min()
+        _metric_x_max = pd.to_datetime(plot_source["_Date"], errors="coerce").max()
+        if pd.notna(_metric_x_min) and pd.notna(_metric_x_max):
+            if _metric_x_min == _metric_x_max:
+                _single_point_pad = pd.Timedelta(hours=0.5 if active_resolution == "Hourly" else 12)
+                _metric_x_min -= _single_point_pad
+                _metric_x_max += _single_point_pad
+            metric_fig.update_xaxes(
+                range=[_metric_x_min, _metric_x_max],
+                autorange=False,
             )
 
         st.plotly_chart(
