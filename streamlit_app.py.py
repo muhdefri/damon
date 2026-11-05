@@ -14,6 +14,7 @@ import math
 import unicodedata
 import hashlib
 import base64
+import pyarrow.parquet as pq
 
 # ============================================================
 # PAGE CONFIG
@@ -1983,47 +1984,44 @@ def apply_internal_mapping(df, localcell_col):
 
 
 # ============================================================
-# UPLOAD — RAW KPI CSV / CSV.GZ
+# UPLOAD — RAW KPI CSV / CSV.GZ / PARQUET
 # ============================================================
 st.sidebar.header("Upload")
 
 uploaded_csv = st.sidebar.file_uploader(
-    "Upload KPI CSV / CSV.GZ",
-    type=["csv", "gz"],
-    help="Supported formats: .csv and .csv.gz",
+    "Upload KPI CSV / CSV.GZ / PARQUET",
+    type=["csv", "gz", "parquet"],
+    help="Supported formats: .csv, .csv.gz and .parquet",
 )
 
 if uploaded_csv is None:
-    st.info("Upload your KPI CSV / CSV.GZ from the sidebar.")
+    st.info("Upload your KPI CSV / CSV.GZ / Parquet from the sidebar.")
     st.stop()
 
-# ------------------------------------------------------------
-# Detect the uploaded file format.
-#
-# Supported:
-#   *.csv
-#   *.csv.gz
-#
-# CSV.GZ is read directly by pandas; no manual unzip/extract
-# step is required.
-# ------------------------------------------------------------
+# Detect input format without changing the existing CSV behaviour.
 uploaded_name = uploaded_csv.name.lower().strip()
 
 if uploaded_name.endswith(".csv.gz"):
+    input_format = "csv"
     input_compression = "gzip"
 elif uploaded_name.endswith(".csv"):
+    input_format = "csv"
+    input_compression = None
+elif uploaded_name.endswith(".parquet"):
+    input_format = "parquet"
     input_compression = None
 else:
-    st.error(
-        "Unsupported file format. "
-        "Please upload a .csv or .csv.gz file."
-    )
+    st.error("Unsupported file format. Please upload .csv, .csv.gz or .parquet.")
     st.stop()
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
-def get_csv_headers(file_bytes, compression=None):
-    """Read only the CSV header once and cache it."""
+def get_csv_headers(file_bytes, compression=None, file_format="csv"):
+    """Read CSV headers or Parquet schema without loading all data."""
+    if file_format == "parquet":
+        parquet_file = pq.ParquetFile(io.BytesIO(file_bytes))
+        return tuple(str(column).strip() for column in parquet_file.schema.names)
+
     header_df = pd.read_csv(
         io.BytesIO(file_bytes),
         compression=compression,
@@ -2045,25 +2043,49 @@ def load_and_prepare_csv(
     date_column,
     time_column=None,
     compression=None,
+    file_format="csv",
 ):
     """
-    Read only columns used by the dashboard, then perform the
-    expensive one-time preparation work.
-
-    Streamlit caches this result, so sidebar changes do not force
-    the CSV parsing and mapping work to run again.
-
-    compression:
-        None   -> normal .csv
-        gzip   -> .csv.gz
+    Read only columns used by the dashboard and perform the
+    existing preparation work. Parquet columns are read selectively.
     """
-    frame = pd.read_csv(
-        io.BytesIO(file_bytes),
-        compression=compression,
-        usecols=list(usecols),
-        low_memory=False,
-        engine="c",
-    )
+    if file_format == "parquet":
+        frame = pd.read_parquet(
+            io.BytesIO(file_bytes),
+            columns=list(usecols),
+            engine="pyarrow",
+        )
+
+        # The safe converter stores source values as strings.
+        # Recreate CSV-like numeric dtypes only when every non-empty
+        # value in a column is numeric; mixed text counters stay text.
+        csv_na_tokens = {
+            "", "NA", "N/A", "NaN", "nan", "NULL", "null",
+            "None", "none", "#N/A", "#NA",
+        }
+        for column in frame.columns:
+            series = frame[column]
+            if pd.api.types.is_object_dtype(series.dtype) or pd.api.types.is_string_dtype(series.dtype):
+                text_values = series.astype("string").str.strip()
+                normalized = text_values.mask(text_values.isin(csv_na_tokens), pd.NA)
+                numeric = pd.to_numeric(normalized, errors="coerce")
+                non_missing = normalized.notna()
+                if numeric.loc[non_missing].notna().all():
+                    frame[column] = numeric
+                else:
+                    # Keep mixed counters (e.g. numeric values plus NIL) as
+                    # text. Common NA tokens are interpreted as missing in
+                    # memory just as pandas read_csv does by default; the
+                    # stored Parquet source values remain unchanged.
+                    frame[column] = normalized.astype(object)
+    else:
+        frame = pd.read_csv(
+            io.BytesIO(file_bytes),
+            compression=compression,
+            usecols=list(usecols),
+            low_memory=False,
+            engine="c",
+        )
 
     frame.columns = [
         str(column).strip()
@@ -2187,15 +2209,16 @@ file_bytes = uploaded_csv.getvalue()
 uploaded_size_mb = len(file_bytes) / (1024 * 1024)
 
 st.sidebar.caption(
-    f"Loaded format: {'CSV.GZ (gzip)' if input_compression == 'gzip' else 'CSV'}"
+    f"Loaded format: {'PARQUET' if input_format == 'parquet' else ('CSV.GZ (gzip)' if input_compression == 'gzip' else 'CSV')}"
 )
 st.sidebar.caption(f"Uploaded file size: {uploaded_size_mb:,.1f} MB")
 
-with st.spinner("Preparing KPI CSV..."):
+with st.spinner("Preparing KPI data..."):
 
     csv_headers = get_csv_headers(
         file_bytes,
         compression=input_compression,
+        file_format=input_format,
     )
 
     header_frame = pd.DataFrame(
@@ -2361,6 +2384,7 @@ with st.spinner("Preparing KPI CSV..."):
         date_col,
         time_col,
         compression=input_compression,
+        file_format=input_format,
     )
 
     _df_memory_mb = df.memory_usage(index=True, deep=True).sum() / (1024 * 1024)
