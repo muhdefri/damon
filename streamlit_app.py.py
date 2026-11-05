@@ -2033,7 +2033,6 @@ def get_csv_headers(file_bytes, compression=None, file_format="csv"):
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=1)
 def load_and_prepare_csv(
     file_bytes,
     usecols,
@@ -2203,10 +2202,24 @@ def load_and_prepare_csv(
     return frame
 
 
-# UploadedFile itself is intentionally not passed into cache_data.
-# Bytes give Streamlit a stable, cacheable input for the same file.
-file_bytes = uploaded_csv.getvalue()
-uploaded_size_mb = len(file_bytes) / (1024 * 1024)
+# Reuse prepared data from session state for the same uploaded file.
+# This avoids repeated byte hashing and DataFrame deserialization on filter reruns.
+uploaded_size_bytes = getattr(uploaded_csv, "size", None)
+if uploaded_size_bytes is None:
+    uploaded_size_bytes = len(uploaded_csv.getvalue())
+uploaded_size_mb = uploaded_size_bytes / (1024 * 1024)
+
+# Streamlit UploadedFile exposes a stable file_id across reruns. Use it as a
+# lightweight session cache key so a large upload does not need to be hashed
+# and reloaded every time a filter changes.
+_upload_file_id = getattr(uploaded_csv, "file_id", None)
+file_bytes = None
+if _upload_file_id is not None:
+    file_cache_token = str(_upload_file_id)
+else:
+    # Compatibility fallback for older Streamlit versions without file_id.
+    file_bytes = uploaded_csv.getvalue()
+    file_cache_token = hashlib.sha256(file_bytes).hexdigest()
 
 st.sidebar.caption(
     f"Loaded format: {'PARQUET' if input_format == 'parquet' else ('CSV.GZ (gzip)' if input_compression == 'gzip' else 'CSV')}"
@@ -2215,11 +2228,20 @@ st.sidebar.caption(f"Uploaded file size: {uploaded_size_mb:,.1f} MB")
 
 with st.spinner("Preparing KPI data..."):
 
-    csv_headers = get_csv_headers(
-        file_bytes,
-        compression=input_compression,
-        file_format=input_format,
+    _header_cache_key = (
+        f"_kpi_csv_headers::{file_cache_token}::{input_format}::{input_compression}"
     )
+    if _header_cache_key in st.session_state:
+        csv_headers = st.session_state[_header_cache_key]
+    else:
+        if file_bytes is None:
+            file_bytes = uploaded_csv.getvalue()
+        csv_headers = get_csv_headers(
+            file_bytes,
+            compression=input_compression,
+            file_format=input_format,
+        )
+        st.session_state[_header_cache_key] = csv_headers
 
     header_frame = pd.DataFrame(
         columns=csv_headers
@@ -2375,17 +2397,56 @@ with st.spinner("Preparing KPI data..."):
         if column in columns_to_read
     )
 
-    df = load_and_prepare_csv(
-        file_bytes,
-        columns_to_read,
+    _prepared_cache_signature = (
+        "prepared-data-v1",
+        file_cache_token,
+        tuple(columns_to_read),
         enodeb_col,
         cell_col,
         localcell_col,
         date_col,
         time_col,
-        compression=input_compression,
-        file_format=input_format,
+        input_format,
+        input_compression,
     )
+    prepared_cache_key = (
+        "_prepared_kpi_dataframe::"
+        + hashlib.sha1(repr(_prepared_cache_signature).encode("utf-8")).hexdigest()
+    )
+
+    if prepared_cache_key in st.session_state:
+        # Reuse the same session-local DataFrame object. Unlike cache_data,
+        # this does not pickle/unpickle or make a full copy on each rerun.
+        df = st.session_state[prepared_cache_key]
+    else:
+        if file_bytes is None:
+            file_bytes = uploaded_csv.getvalue()
+        df = load_and_prepare_csv(
+            file_bytes,
+            columns_to_read,
+            enodeb_col,
+            cell_col,
+            localcell_col,
+            date_col,
+            time_col,
+            compression=input_compression,
+            file_format=input_format,
+        )
+        # Keep only the active upload's prepared dataframe in this session.
+        for _session_key in list(st.session_state.keys()):
+            if (
+                isinstance(_session_key, str)
+                and _session_key.startswith("_prepared_kpi_dataframe::")
+                and _session_key != prepared_cache_key
+            ):
+                del st.session_state[_session_key]
+            elif (
+                isinstance(_session_key, str)
+                and _session_key.startswith("_kpi_csv_headers::")
+                and _session_key != _header_cache_key
+            ):
+                del st.session_state[_session_key]
+        st.session_state[prepared_cache_key] = df
 
     _df_memory_mb = df.memory_usage(index=True, deep=True).sum() / (1024 * 1024)
     st.sidebar.caption(
@@ -2416,6 +2477,8 @@ NUM_DEN_SOURCE_COLUMNS = {
 
 num_den_available = []
 if kpi_value_mode == "KPI Num/Denum":
+    # Keep the session-cached base dataframe immutable across reruns.
+    df = df.copy()
     for derived_name, (numerator_col, denominator_col, formula) in NUM_DEN_SOURCE_COLUMNS.items():
         if numerator_col not in df.columns or denominator_col not in df.columns:
             continue
@@ -3645,9 +3708,7 @@ for kpi_name in main_chart_kpis:
 
                 grouped = (
                     pd.DataFrame({
-                        "_Cell_Display": sector_df["_Cell_Display"].apply(
-                            normalize_cell_name
-                        ),
+                        "_Cell_Display": sector_df["_Cell_Display"],
                         "_Value": values,
                     })
                     .groupby(
@@ -3764,24 +3825,8 @@ for kpi_name in main_chart_kpis:
             )
         )
 
-        # Final safety guard: one normalized Cell Name = one series.
-        plot_df["_Cell_Display"] = (
-            plot_df["_Cell_Display"]
-            .map(normalize_cell_name)
-        )
-
-        plot_df = (
-            plot_df
-            .groupby(
-                ["_Chart_Date", "_Cell_Display"],
-                as_index=False,
-                dropna=False,
-            )["_KPI_Value"]
-            .mean()
-            .sort_values(
-                ["_Chart_Date", "_Cell_Display"]
-            )
-        )
+        # _Cell_Display is already normalized once during data preparation.
+        # Avoid repeating the same normalization and second groupby per chart.
 
         # Preserve the existing hourly outage behavior.
         if is_hourly and not plot_df.empty:
@@ -3953,24 +3998,8 @@ for kpi_name in main_chart_kpis:
             )
         )
 
-        # Final safety guard: one normalized Cell Name = one series.
-        plot_df["_Cell_Display"] = (
-            plot_df["_Cell_Display"]
-            .map(normalize_cell_name)
-        )
-
-        plot_df = (
-            plot_df
-            .groupby(
-                ["_Chart_Date", "_Cell_Display"],
-                as_index=False,
-                dropna=False,
-            )["_KPI_Value"]
-            .mean()
-            .sort_values(
-                ["_Chart_Date", "_Cell_Display"]
-            )
-        )
+        # _Cell_Display is already normalized once during data preparation.
+        # Avoid repeating the same normalization and second groupby per chart.
 
         # --------------------------------------------------------
         # Hourly outage handling:
