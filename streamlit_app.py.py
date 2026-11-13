@@ -2940,7 +2940,8 @@ QUICK_KPI = [
     "QPSK Distribution",
     "Sum_L.Traffic.User.Avg",
 
-    # Remaining KPI 1 items (SSSR intentionally excluded; select it manually in Accessibility)
+    # Accessibility KPI — include SSSR in the Quick KPI list
+    "SSSR",
     "RRC Setup SR",
     "E-RAB Setup SR",
     "DL Payload",
