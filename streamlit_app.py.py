@@ -2960,7 +2960,7 @@ quick_kpis = st.sidebar.multiselect(
     "Quick KPI",
     quick_kpi_options,
     default=quick_kpi_options,
-    key="quick_kpi_selection_v3",
+    key="quick_kpi_selection_v4",
 )
 
 # Add Quick KPI selections to the normal KPI selection.
